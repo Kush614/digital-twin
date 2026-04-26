@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { classifyAsl, SUPPORTED_LETTERS, type AslLetter } from "@/lib/asl";
 
 // 7 gesture categories produced by MediaPipe's GestureRecognizer model,
 // mapped to pitch-flavoured phrases for ImpactLens.
@@ -65,6 +66,20 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
   const [currentGesture, setCurrentGesture] = useState<string>("None");
   const [confidence, setConfidence] = useState<number>(0);
   const [recognized, setRecognized] = useState<{ name: string; phrase: string; at: number }[]>([]);
+
+  // ASL fingerspelling state
+  const [aslMode, setAslMode] = useState(false);
+  const aslModeRef = useRef(false);
+  useEffect(() => { aslModeRef.current = aslMode; }, [aslMode]);
+  const [aslLetter, setAslLetter] = useState<AslLetter | null>(null);
+  const [aslConfidence, setAslConfidence] = useState(0);
+  const [aslBuffer, setAslBuffer] = useState("");
+  const aslHoldRef = useRef<{ letter: AslLetter | null; since: number; commitedAt: number; lastSeen: number }>({
+    letter: null,
+    since: 0,
+    commitedAt: 0,
+    lastSeen: 0,
+  });
 
   useEffect(() => {
     // Same MediaPipe stderr-routing noise filter as FaceIdCapture.
@@ -164,6 +179,7 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
   function drawFrame(ctx: CanvasRenderingContext2D, w: number, h: number, result: any) {
     ctx.clearRect(0, 0, w, h);
 
+    const inAsl = aslModeRef.current;
     if (result?.landmarks?.length) {
       for (let hi = 0; hi < result.landmarks.length; hi++) {
         const hand = result.landmarks[hi];
@@ -171,25 +187,85 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
         const isCertain = cat && cat.score > 0.7 && cat.categoryName !== "None";
         drawHandSkeleton(ctx, hand, w, h, isCertain);
         drawFingertipGlow(ctx, hand, w, h);
-        if (cat && cat.categoryName !== "None") {
-          // floating label near wrist (landmark 0)
-          if (isCertain) maybeFireGesture(cat.categoryName, cat.score, hand[0], w, h);
+        if (!inAsl && cat && cat.categoryName !== "None" && isCertain) {
+          maybeFireGesture(cat.categoryName, cat.score, hand[0], w, h);
         }
       }
-      const top = result.gestures?.[0]?.[0];
-      if (top) {
-        setCurrentGesture(top.categoryName);
-        setConfidence(top.score);
+
+      if (inAsl) {
+        // Run ASL fingerspelling on the most prominent hand only
+        const hand = result.landmarks[0];
+        const pred = classifyAsl(hand);
+        const now = performance.now();
+        aslHoldRef.current.lastSeen = now;
+        if (pred && pred.confidence >= 0.7) {
+          setAslLetter(pred.letter);
+          setAslConfidence(pred.confidence);
+          const hold = aslHoldRef.current;
+          if (hold.letter !== pred.letter) {
+            hold.letter = pred.letter;
+            hold.since = now;
+          } else if (
+            now - hold.since > 700 &&
+            now - hold.commitedAt > 600 // debounce double-fires
+          ) {
+            commitLetter(pred.letter);
+            hold.commitedAt = now;
+            // require user to leave & re-enter the shape to fire it again
+            hold.since = Number.MAX_SAFE_INTEGER;
+          }
+        } else {
+          setAslLetter(null);
+          setAslConfidence(0);
+          aslHoldRef.current.letter = null;
+        }
       } else {
-        setCurrentGesture("None");
-        setConfidence(0);
+        const top = result.gestures?.[0]?.[0];
+        if (top) {
+          setCurrentGesture(top.categoryName);
+          setConfidence(top.score);
+        } else {
+          setCurrentGesture("None");
+          setConfidence(0);
+        }
       }
     } else {
       setCurrentGesture("None");
       setConfidence(0);
+      if (inAsl) {
+        const hold = aslHoldRef.current;
+        const now = performance.now();
+        // Auto-insert a space after 1.5s of no hand if buffer doesn't already end in space
+        if (hold.lastSeen && now - hold.lastSeen > 1500) {
+          setAslBuffer((b) => (b.length > 0 && !b.endsWith(" ") ? b + " " : b));
+          hold.lastSeen = 0;
+        }
+        setAslLetter(null);
+        setAslConfidence(0);
+      }
     }
 
     drawFloatingLabels(ctx, w, h);
+  }
+
+  function commitLetter(letter: AslLetter) {
+    setAslBuffer((b) => b + letter);
+  }
+
+  function clearBuffer() {
+    setAslBuffer("");
+    aslHoldRef.current = { letter: null, since: 0, commitedAt: 0, lastSeen: 0 };
+  }
+
+  function backspace() {
+    setAslBuffer((b) => b.slice(0, -1));
+  }
+
+  function commitToPitch() {
+    const trimmed = aslBuffer.trim();
+    if (!trimmed) return;
+    onPhrase(`[ASL fingerspelled] ${trimmed}`);
+    clearBuffer();
   }
 
   function drawHandSkeleton(
@@ -321,16 +397,60 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
             </div>
           )}
 
-          {running && (
+          {running && !aslMode && (
             <div className="absolute top-2 left-2 z-10 px-2 py-1 rounded-md bg-black/70 text-xs font-mono text-white/80">
               ● live · {currentGesture !== "None" ? `${currentGesture} (${(confidence * 100).toFixed(0)}%)` : "…"}
             </div>
           )}
+          {running && aslMode && (
+            <>
+              <div className="absolute top-2 left-2 z-10 px-2 py-1 rounded-md bg-black/70 text-xs font-mono text-white/80">
+                ● ASL fingerspelling
+              </div>
+              {aslLetter && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                  <div
+                    className="text-[140px] font-bold leading-none"
+                    style={{
+                      color: "rgba(245,243,238,0.92)",
+                      textShadow: "0 0 30px rgba(124,92,255,0.9), 0 0 80px rgba(124,92,255,0.4)",
+                    }}
+                  >
+                    {aslLetter}
+                  </div>
+                </div>
+              )}
+              {aslLetter && (
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 px-2 py-1 rounded-md bg-black/70 text-[11px] font-mono text-white/70">
+                  hold {aslLetter} for ~700ms · {(aslConfidence * 100).toFixed(0)}%
+                </div>
+              )}
+            </>
+          )}
         </div>
         {running && (
-          <div className="p-3 bg-black/50 flex items-center justify-between">
-            <div className="text-[11px] text-white/40">
-              Hold a gesture for ~1s to add its phrase to your pitch.
+          <div className="p-3 bg-black/50 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAslMode(false)}
+                className={
+                  "px-2.5 py-1 rounded-md text-xs border transition " +
+                  (!aslMode ? "bg-accent/20 border-accent text-white" : "bg-white/5 border-white/10 text-white/60")
+                }
+              >
+                7 Common gestures
+              </button>
+              <button
+                type="button"
+                onClick={() => setAslMode(true)}
+                className={
+                  "px-2.5 py-1 rounded-md text-xs border transition " +
+                  (aslMode ? "bg-accent/20 border-accent text-white" : "bg-white/5 border-white/10 text-white/60")
+                }
+              >
+                ASL fingerspelling
+              </button>
             </div>
             <button type="button" className="btn-ghost text-xs" onClick={stop}>
               Stop
@@ -338,6 +458,46 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
           </div>
         )}
       </div>
+
+      {running && aslMode && (
+        <div className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[10px] uppercase tracking-wider text-white/40">Spelling buffer</div>
+            <div className="text-[10px] text-white/40">
+              supported: {SUPPORTED_LETTERS.join(", ")}
+            </div>
+          </div>
+          <div
+            className="rounded-md bg-black/40 border border-white/10 px-3 py-2 font-mono text-lg min-h-[2.5rem]"
+            style={{ letterSpacing: "0.15em" }}
+          >
+            {aslBuffer || <span className="text-white/30">…</span>}
+            {aslLetter && (
+              <span className="text-accent2 animate-pulse"> {aslLetter}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" className="btn-ghost text-xs" onClick={backspace} disabled={!aslBuffer}>
+              ⌫ Backspace
+            </button>
+            <button type="button" className="btn-ghost text-xs" onClick={() => setAslBuffer((b) => b + " ")}>
+              ␣ Space
+            </button>
+            <button type="button" className="btn-ghost text-xs" onClick={clearBuffer} disabled={!aslBuffer}>
+              Clear
+            </button>
+            <div className="flex-1" />
+            <button type="button" className="btn text-sm" onClick={commitToPitch} disabled={!aslBuffer.trim()}>
+              ↩ Add to pitch
+            </button>
+          </div>
+          <div className="text-[10px] text-white/40 leading-snug">
+            Static-shape ASL fingerspelling, 12-letter subset. J and Z are motion letters and not yet
+            handled. Hold each letter ~700ms to commit; pause &gt;1.5s for a space; the assembled
+            phrase is added to your pitch when you click <em>Add to pitch</em>.
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
         {Object.entries(GESTURE_LABELS)
