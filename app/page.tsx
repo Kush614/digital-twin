@@ -38,7 +38,7 @@ export default async function HomePage() {
         <Stat top="0" label="open-source tools that address both barriers simultaneously" />
       </section>
 
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-12">
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <Link
           href="/apply"
           className="glass rounded-2xl p-6 group hover:border-accent/60 border border-white/5 transition"
@@ -55,6 +55,7 @@ export default async function HomePage() {
             <span className="tag">🖼 Symbol board</span>
             <span className="tag">🤟 Gesture</span>
             <span className="tag">👁 Eye gaze</span>
+            <span className="tag">📸 Image / video</span>
           </div>
         </Link>
 
@@ -71,6 +72,27 @@ export default async function HomePage() {
           <div className="text-xs text-white/40">
             {apps.length} application{apps.length === 1 ? "" : "s"} ·{" "}
             {evaluated.length} evaluated · {flagged.length} flagged
+          </div>
+        </Link>
+      </section>
+
+      <section className="mb-12">
+        <Link
+          href="/asl-demo"
+          className="block glass rounded-2xl p-5 group hover:border-accent/60 border border-white/5 transition"
+        >
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="tag">Voice & Vision · add-on</span>
+                <span className="tag">GLM-4.5V</span>
+              </div>
+              <h3 className="text-lg font-semibold">🤟 ASL Video Transcription Demo</h3>
+              <p className="text-xs text-white/60 mt-1">
+                Drop a sign-language clip (download YouTube videos with <span className="font-mono">yt-dlp</span> first). Frames are sampled, sent to GLM-4.5V in parallel, and assembled into a transcript live.
+              </p>
+            </div>
+            <div className="text-2xl text-accent2 group-hover:translate-x-1 transition shrink-0">→</div>
           </div>
         </Link>
       </section>
