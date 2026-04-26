@@ -35,9 +35,10 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
   const landmarkerRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
-  const blinkStateRef = useRef({ closed: false, count: 0 });
+  const blinkStateRef = useRef({ closed: false, count: 0, baseline: 0.3 });
   const yawHistoryRef = useRef<number[]>([]);
   const sweepRef = useRef(0);
+  const liveStatsRef = useRef({ ear: 0, yaw: 0 });
 
   const [step, setStep] = useState<Step>("idle");
   const [err, setErr] = useState<string | null>(null);
@@ -94,8 +95,9 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
     setStep("loading");
     setBlinks(0);
     setMaxYaw(0);
-    blinkStateRef.current = { closed: false, count: 0 };
+    blinkStateRef.current = { closed: false, count: 0, baseline: 0.3 };
     yawHistoryRef.current = [];
+    liveStatsRef.current = { ear: 0, yaw: 0 };
     try {
       const lm = await ensureLandmarker();
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -183,43 +185,44 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
       const fcx = ((minX + maxX) / 2) * w;
       const fcy = ((minY + maxY) / 2) * h;
       const fr = Math.max((maxX - minX) * w, (maxY - minY) * h) / 2;
-      // Looser tolerance: face center within half the guide, size from 35%
-      // up to 130% of the guide radius. Keeps people at varying distances
-      // from getting stuck on the alignment step.
       const inside = Math.hypot(fcx - cx, fcy - cy) < radius * 0.5;
       const correctSize = fr > radius * 0.35 && fr < radius * 1.3;
       aligned = inside && correctSize;
 
       drawFaceMesh(ctx, face, w, h, aligned);
 
-      if (aligned) {
-        if (step === "align") setStep("blink");
-        if (step === "blink") {
-          const ear = avgEyeAspectRatio(face);
-          updateBlink(ear);
-          if (blinkStateRef.current.count >= 2) {
-            setStep("turn");
-            yawHistoryRef.current = [];
-          }
+      // Always compute live stats and run liveness checks once a face is seen,
+      // even if the user has drifted slightly off-centre. Alignment is only
+      // gating the transition out of the "align" step.
+      const ear = avgEyeAspectRatio(face);
+      const yaw = estimateYaw(face);
+      liveStatsRef.current = { ear, yaw };
+
+      if (step === "align" && aligned) {
+        setStep("blink");
+      }
+      if (step === "blink") {
+        updateBlink(ear);
+        if (blinkStateRef.current.count >= 2) {
+          setStep("turn");
+          yawHistoryRef.current = [];
         }
-        if (step === "turn") {
-          const yaw = estimateYaw(face);
-          yawHistoryRef.current.push(yaw);
-          if (yawHistoryRef.current.length > 90) yawHistoryRef.current.shift();
-          const peak = Math.max(...yawHistoryRef.current.map(Math.abs));
-          setMaxYaw(peak);
-          if (peak > 0.18) {
-            // success — capture descriptor
-            const descriptor = buildDescriptor(face);
-            const desc: FaceDescriptor = {
-              vector: descriptor,
-              livenessChecks: { blink: true, turn: true },
-              capturedAt: Date.now(),
-            };
-            setCaptured(desc);
-            setStep("captured");
-            onCaptured(desc);
-          }
+      }
+      if (step === "turn") {
+        yawHistoryRef.current.push(yaw);
+        if (yawHistoryRef.current.length > 90) yawHistoryRef.current.shift();
+        const peak = Math.max(...yawHistoryRef.current.map(Math.abs));
+        setMaxYaw(peak);
+        if (peak > 0.12) {
+          const descriptor = buildDescriptor(face);
+          const desc: FaceDescriptor = {
+            vector: descriptor,
+            livenessChecks: { blink: true, turn: true },
+            capturedAt: Date.now(),
+          };
+          setCaptured(desc);
+          setStep("captured");
+          onCaptured(desc);
         }
       }
     } else if (step !== "idle" && step !== "loading" && step !== "captured") {
@@ -285,13 +288,19 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
   }
 
   function updateBlink(ear: number) {
-    const open = ear > 0.22;
-    if (!open && !blinkStateRef.current.closed) {
-      blinkStateRef.current.closed = true;
-    } else if (open && blinkStateRef.current.closed) {
-      blinkStateRef.current.closed = false;
-      blinkStateRef.current.count++;
-      setBlinks(blinkStateRef.current.count);
+    // Adaptive baseline — track the user's actual open-eye EAR so people with
+    // narrower or wider eyes both work. Closed = ear < 65% of running baseline.
+    const s = blinkStateRef.current;
+    if (ear > s.baseline) s.baseline = ear * 0.6 + s.baseline * 0.4; // raise baseline fast
+    else s.baseline = ear * 0.05 + s.baseline * 0.95;                 // decay slowly
+    const closedThresh = Math.max(0.12, s.baseline * 0.65);
+    const open = ear > closedThresh;
+    if (!open && !s.closed) {
+      s.closed = true;
+    } else if (open && s.closed) {
+      s.closed = false;
+      s.count++;
+      setBlinks(s.count);
     }
   }
 
@@ -350,6 +359,10 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
                 <span className={faceVisible ? "text-accent2" : "text-warn"}>
                   {faceVisible ? "● face detected" : "○ no face detected"}
                 </span>
+              </div>
+              <div className="absolute top-2 right-2 z-10 px-2 py-1 rounded-md bg-black/70 text-[10px] font-mono text-white/70 leading-tight text-right">
+                <div>EAR {liveStatsRef.current.ear.toFixed(2)} · base {blinkStateRef.current.baseline.toFixed(2)}</div>
+                <div>yaw {(liveStatsRef.current.yaw * 100).toFixed(0)}%</div>
               </div>
               <div className="absolute inset-x-0 bottom-2 flex justify-center pointer-events-none z-10">
                 <div className="px-3 py-1.5 rounded-md bg-black/70 backdrop-blur text-xs text-white/90 font-mono">
@@ -420,13 +433,14 @@ function avgEyeAspectRatio(face: { x: number; y: number }[]): number {
 }
 
 function estimateYaw(face: { x: number; y: number }[]): number {
-  // crude yaw: signed offset of nose tip from face midline (between cheekbone landmarks)
+  // Eye-corner-based yaw is much more stable than cheekbone-based yaw.
+  // Returns signed fraction of inter-eye distance the nose has shifted off-axis.
   const noseTip = face[1];
-  const left = face[234];
-  const right = face[454];
-  if (!noseTip || !left || !right) return 0;
-  const mid = (left.x + right.x) / 2;
-  const span = Math.abs(right.x - left.x) || 0.0001;
+  const leftEye = face[33];
+  const rightEye = face[263];
+  if (!noseTip || !leftEye || !rightEye) return 0;
+  const mid = (leftEye.x + rightEye.x) / 2;
+  const span = Math.abs(rightEye.x - leftEye.x) || 0.0001;
   return (noseTip.x - mid) / span;
 }
 
