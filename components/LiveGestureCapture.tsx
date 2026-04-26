@@ -266,10 +266,11 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
         const steadyMs = cap.steadySince ? now - cap.steadySince : 0;
         const heldLongEnough = steadyMs > 800;
         const cooldownDone = now - cap.lastFiredAt > 1800;
-        if (heldLongEnough && cooldownDone && !cap.inflight) {
+        const videoEl = videoRef.current;
+        if (heldLongEnough && cooldownDone && !cap.inflight && videoEl) {
           cap.inflight = true;
           cap.lastFiredAt = now;
-          fireAiCapture(hand, w, h, v).finally(() => {
+          fireAiCapture(hand, w, h, videoEl).finally(() => {
             cap.inflight = false;
           });
         }
