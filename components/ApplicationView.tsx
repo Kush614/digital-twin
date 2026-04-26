@@ -218,13 +218,65 @@ function FingerprintCard({ fp }: { fp: NonNullable<Application["fingerprint"]> }
 function VisionCard({ evidence }: { evidence: NonNullable<Application["visionEvidence"]> }) {
   const synth = Math.round(evidence.syntheticConfidence * 100);
   const isFlagged = evidence.syntheticConfidence >= 0.6;
+  const isVideo = evidence.source === "video";
   return (
     <div className="glass rounded-2xl p-6">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold">Vision evidence</h2>
-        <span className="tag">Z.AI · {evidence.rawModel ?? "vision"}</span>
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+        <h2 className="text-lg font-semibold">
+          {isVideo ? "Video evidence" : "Vision evidence"}
+        </h2>
+        <div className="flex items-center gap-1.5">
+          <span className="tag">{sourceLabel(evidence.source)}</span>
+          {evidence.frameCount !== undefined && (
+            <span className="tag">{evidence.frameCount} keyframes</span>
+          )}
+          {evidence.transcript && <span className="tag">+ transcript</span>}
+          <span className="tag">Z.AI · {evidence.rawModel ?? "vision"}</span>
+        </div>
       </div>
+
       <p className="text-sm text-white/80 mb-3">{evidence.description}</p>
+
+      {evidence.transcript && (
+        <div className="mb-3 rounded-lg border border-accent2/30 bg-accent2/5 p-3">
+          <div className="text-[10px] uppercase tracking-wider text-accent2 mb-1">
+            Spoken transcript
+          </div>
+          <div className="text-sm text-white/85 italic leading-snug">
+            “{evidence.transcript}”
+          </div>
+        </div>
+      )}
+
+      {isVideo && !evidence.transcript && (
+        <div className="mb-3 rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-white/60">
+          No spoken transcript captured — applicant may have been signing or recorded silently.
+          The frame analysis still applies.
+        </div>
+      )}
+
+      {evidence.frames && evidence.frames.length > 0 && (
+        <div className="mb-3">
+          <div className="text-[10px] uppercase tracking-wider text-white/40 mb-2">
+            Sampled keyframes ({evidence.frames.length})
+          </div>
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+            {evidence.frames.map((f, i) => (
+              <div key={i} className="relative">
+                <img
+                  src={f}
+                  alt={`keyframe ${i + 1}`}
+                  className="rounded border border-white/10 aspect-video object-cover w-full"
+                />
+                <span className="absolute bottom-0.5 right-0.5 text-[9px] bg-black/70 text-white/80 px-1 rounded font-mono">
+                  {i + 1}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {evidence.claimsVisible.length > 0 && (
         <div className="mb-3">
           <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">Claims visible</div>
@@ -251,6 +303,15 @@ function VisionCard({ evidence }: { evidence: NonNullable<Application["visionEvi
       </div>
     </div>
   );
+}
+
+function sourceLabel(s: NonNullable<Application["visionEvidence"]>["source"]): string {
+  return ({
+    upload: "📁 upload",
+    camera: "📷 live camera",
+    screen: "🖥 screen",
+    video: "🎬 video pitch",
+  } as Record<string, string>)[s] ?? s;
 }
 
 function FraudCard({ flags }: { flags: NonNullable<Application["fraudFlags"]> }) {

@@ -29,6 +29,9 @@ export default async function ReviewPage() {
           {apps.map((a) => {
             const score = a.totalScore ?? null;
             const flags = a.fraudFlags?.length ?? 0;
+            const hasVideo = a.visionEvidence?.source === "video";
+            const hasTranscript = !!a.visionEvidence?.transcript;
+            const hasFace = !!a.faceDescriptor;
             return (
               <li key={a.id}>
                 <Link
@@ -42,7 +45,10 @@ export default async function ReviewPage() {
                         {a.category} · {inputModeLabel(a.inputMode)} · {a.githubUrl}
                       </div>
                     </div>
-                    <div className="flex items-center gap-3 shrink-0">
+                    <div className="flex items-center gap-2 shrink-0">
+                      {hasFace && <span className="tag">🔒 ID</span>}
+                      {hasVideo && <span className="tag">🎬 video</span>}
+                      {hasTranscript && <span className="tag">+ transcript</span>}
                       {flags > 0 && (
                         <span
                           className="text-[11px] px-2 py-0.5 rounded-full border"

@@ -13,12 +13,15 @@ const Body = z.object({
   inputMode: z.enum(["voice", "text", "symbol", "gesture", "gaze", "image"]),
   visionEvidence: z
     .object({
-      source: z.enum(["upload", "screen", "camera"]),
+      source: z.enum(["upload", "screen", "camera", "video"]),
       description: z.string(),
       claimsVisible: z.array(z.string()),
       technicalSignals: z.array(z.string()),
       syntheticConfidence: z.number().min(0).max(1),
       rawModel: z.string().optional(),
+      frameCount: z.number().int().min(0).max(8).optional(),
+      transcript: z.string().max(4000).optional(),
+      frames: z.array(z.string().startsWith("data:image/").max(8 * 1024 * 1024)).max(8).optional(),
       fetchedAt: z.number(),
     })
     .optional(),

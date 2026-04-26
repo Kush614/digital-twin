@@ -138,6 +138,8 @@ export async function analyzeVideoFrames(
       syntheticConfidence: parsed.syntheticConfidence,
       rawModel: model,
       frameCount: frames.length,
+      transcript: transcript?.trim() || undefined,
+      frames,
       fetchedAt: Date.now(),
     };
   } catch (e: any) {

@@ -8,6 +8,8 @@ export type VisionEvidence = {
   syntheticConfidence: number; // 0..1; >= 0.6 trips a fraud flag
   rawModel?: string;
   frameCount?: number;        // for video: number of keyframes analysed
+  transcript?: string;        // for video: STT capture of spoken pitch
+  frames?: string[];          // for video: sampled keyframe data URLs (small JPEGs)
   fetchedAt: number;
 };
 
