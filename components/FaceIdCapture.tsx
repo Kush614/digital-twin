@@ -48,6 +48,10 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
   const [captured, setCaptured] = useState<FaceDescriptor | null>(null);
   const [faceVisible, setFaceVisible] = useState(false);
 
+  // Refs that the rAF loop reads (state alone is stale across rAF closures).
+  const stepRef = useRef<Step>("idle");
+  useEffect(() => { stepRef.current = step; }, [step]);
+
   useEffect(() => {
     // MediaPipe's WASM writes INFO logs to console.error (Emscripten routes
     // stderr there). Next.js dev overlay treats any console.error as a
@@ -105,6 +109,7 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
 
   async function start() {
     setErr(null);
+    stepRef.current = "loading";
     setStep("loading");
     setBlinks(0);
     setMaxYaw(0);
@@ -121,9 +126,11 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
       const v = videoRef.current!;
       v.srcObject = stream;
       await v.play();
+      stepRef.current = "align";
       setStep("align");
       loop(lm);
     } catch (e: any) {
+      stepRef.current = "idle";
       setStep("idle");
       setErr(e?.message ?? "camera or model failed");
     }
@@ -211,17 +218,25 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
       const yaw = estimateYaw(face);
       liveStatsRef.current = { ear, yaw };
 
-      if (step === "align" && aligned) {
+      // IMPORTANT: read step from the ref, not the closure-captured state.
+      // The rAF loop closure freezes the `step` value at the time loop was
+      // first invoked, so reading state directly here would never see
+      // transitions caused by setStep().
+      const currentStep = stepRef.current;
+
+      if (currentStep === "align" && aligned) {
+        stepRef.current = "blink";
         setStep("blink");
       }
-      if (step === "blink") {
+      if (currentStep === "blink") {
         updateBlink(ear);
         if (blinkStateRef.current.count >= 2) {
+          stepRef.current = "turn";
           setStep("turn");
           yawHistoryRef.current = [];
         }
       }
-      if (step === "turn") {
+      if (currentStep === "turn") {
         yawHistoryRef.current.push(yaw);
         if (yawHistoryRef.current.length > 90) yawHistoryRef.current.shift();
         const peak = Math.max(...yawHistoryRef.current.map(Math.abs));
@@ -234,11 +249,17 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
             capturedAt: Date.now(),
           };
           setCaptured(desc);
+          stepRef.current = "captured";
           setStep("captured");
           onCaptured(desc);
         }
       }
-    } else if (step !== "idle" && step !== "loading" && step !== "captured") {
+    } else if (
+      stepRef.current !== "idle" &&
+      stepRef.current !== "loading" &&
+      stepRef.current !== "captured"
+    ) {
+      stepRef.current = "align";
       setStep("align");
     }
 
@@ -246,7 +267,9 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
     drawRing(ctx, cx, cy, radius);
     setFaceVisible(faceDetected);
 
-    setProgress(progressForStep(step, blinkStateRef.current.count, maxYaw));
+    setProgress(
+      progressForStep(stepRef.current, blinkStateRef.current.count, maxYaw)
+    );
   }
 
   function drawFaceMesh(
@@ -289,7 +312,7 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
     ctx.stroke();
 
-    const p = progressForStep(step, blinkStateRef.current.count, maxYaw);
+    const p = progressForStep(stepRef.current, blinkStateRef.current.count, maxYaw);
     if (p > 0) {
       ctx.lineWidth = 5;
       ctx.strokeStyle = "rgba(124,92,255,0.95)";
