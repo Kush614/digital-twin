@@ -67,7 +67,18 @@ export async function recogniseAslLetter(imageDataUrl: string): Promise<AslVisio
       rawModel: ZAI_VISION_MODEL,
     };
   } catch (e: any) {
-    return { letter: null, confidence: 0, reason: e?.message ?? "vision call failed", rawModel: ZAI_VISION_MODEL };
+    const msg = e?.message ?? String(e);
+    // Z.AI billing error surfaces as 429 with code 1113. Make the failure
+    // mode legible to the demo audience instead of a raw stack.
+    if (/1113|insufficient balance|recharge|quota/i.test(msg)) {
+      return {
+        letter: null,
+        confidence: 0,
+        reason: "Z.AI account out of balance — top up at z.ai/billing to enable live ASL.",
+        rawModel: ZAI_VISION_MODEL,
+      };
+    }
+    return { letter: null, confidence: 0, reason: msg, rawModel: ZAI_VISION_MODEL };
   }
 }
 

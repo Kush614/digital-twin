@@ -58,7 +58,11 @@ export async function analyzeImage(imageDataUrl: string, source: VisionEvidence[
       fetchedAt: Date.now(),
     };
   } catch (e: any) {
-    return mockAnalyze(source, e?.message ?? "vision call failed");
+    const msg = e?.message ?? String(e);
+    if (/1113|insufficient balance|recharge|quota/i.test(msg)) {
+      return mockAnalyze(source, "Z.AI account out of balance — top up to enable vision analysis");
+    }
+    return mockAnalyze(source, msg);
   }
 }
 
