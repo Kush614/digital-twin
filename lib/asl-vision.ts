@@ -1,5 +1,135 @@
 import { hasZaiKeys, withZai } from "./zai";
 
+const SENTENCE_SYSTEM = `You are a professional sign-language interpreter and translator.
+You will receive a chronologically-ordered set of keyframes from a short video
+of someone signing. Your job is to produce the **English sentence** the signer
+is communicating — not a list of letters.
+
+Detect what mode is being used:
+- "fingerspelling" — hand shapes are the ASL alphabet, signer is spelling a word
+  letter by letter
+- "asl-signs" — full ASL signs / gloss (movement-based signs that map to whole
+  words or concepts)
+- "mixed" — both fingerspelling and signs, or fingerspelling proper nouns inside
+  signed sentences
+- "unclear" — frames are too noisy / partial / not actually signing
+
+Then produce:
+- the most likely English sentence (or short phrase). If it is fingerspelling,
+  collapse the letters into the word(s). If it is ASL signs, translate to fluent
+  English (not gloss).
+- a "gloss" array — your best guess at what each frame was, in order. Use letters
+  for fingerspelled frames and ALL_CAPS gloss labels for signs (e.g. "HELLO",
+  "NAME", "THANK_YOU"). Use null for frames that didn't carry a sign.
+- confidence in [0,1]
+
+Reply with ONLY a single JSON object:
+{"sentence":"...","mode":"fingerspelling"|"asl-signs"|"mixed"|"unclear","gloss":["A","B",null,...],"confidence":0.0,"notes":"<one short sentence>"}`;
+
+export type AslSentenceResult = {
+  sentence: string;
+  mode: "fingerspelling" | "asl-signs" | "mixed" | "unclear";
+  gloss: (string | null)[];
+  confidence: number;
+  notes: string;
+  rawModel: string;
+};
+
+export async function transcribeAslVideo(frames: string[]): Promise<AslSentenceResult> {
+  if (!hasZaiKeys()) {
+    return {
+      sentence: "",
+      mode: "unclear",
+      gloss: [],
+      confidence: 0,
+      notes: "[mock] no Z.AI keys configured",
+      rawModel: "mock",
+    };
+  }
+  if (frames.length === 0) {
+    return {
+      sentence: "",
+      mode: "unclear",
+      gloss: [],
+      confidence: 0,
+      notes: "no frames provided",
+      rawModel: "no-input",
+    };
+  }
+  try {
+    const { raw, model } = await withZai(
+      async (client, model) => {
+        const res = await client.chat.completions.create({
+          model,
+          temperature: 0.1,
+          messages: [
+            { role: "system", content: SENTENCE_SYSTEM },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `Translate the sign-language sequence in these ${frames.length} chronological keyframes. Reply with the strict JSON.`,
+                },
+                ...frames.map((url) => ({
+                  type: "image_url" as const,
+                  image_url: { url },
+                })),
+              ] as any,
+            },
+          ],
+        });
+        return { raw: res.choices?.[0]?.message?.content ?? "", model };
+      },
+      { vision: true }
+    );
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (!m) {
+      return {
+        sentence: "",
+        mode: "unclear",
+        gloss: [],
+        confidence: 0,
+        notes: `non-JSON: ${raw.slice(0, 80)}`,
+        rawModel: model,
+      };
+    }
+    const obj = JSON.parse(m[0]);
+    return {
+      sentence: typeof obj.sentence === "string" ? obj.sentence.trim().slice(0, 400) : "",
+      mode: ["fingerspelling", "asl-signs", "mixed", "unclear"].includes(obj.mode)
+        ? obj.mode
+        : "unclear",
+      gloss: Array.isArray(obj.gloss)
+        ? obj.gloss.slice(0, 64).map((g: any) => (typeof g === "string" ? g : null))
+        : [],
+      confidence: clamp01(obj.confidence),
+      notes: typeof obj.notes === "string" ? obj.notes.slice(0, 200) : "",
+      rawModel: model,
+    };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    if ((e as any)?.code === "ZAI_POOL_EXHAUSTED") {
+      return {
+        sentence: "",
+        mode: "unclear",
+        gloss: [],
+        confidence: 0,
+        notes: "All Z.AI keys cooling down — try again in a minute.",
+        rawModel: "pool-exhausted",
+      };
+    }
+    return {
+      sentence: "",
+      mode: "unclear",
+      gloss: [],
+      confidence: 0,
+      notes: msg.slice(0, 200),
+      rawModel: "error",
+    };
+  }
+}
+
 const SYSTEM = `You are an ASL fingerspelling recogniser. The image contains a
 single hand making one letter of the American Sign Language alphabet. Identify
 which letter (A-Z) the hand shape represents.

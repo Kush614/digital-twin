@@ -28,6 +28,58 @@ export default function AslVideoDemo() {
   const [err, setErr] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
 
+  // Sentence-level transcription state
+  type SentenceState = {
+    sentence: string;
+    mode: "fingerspelling" | "asl-signs" | "mixed" | "unclear" | null;
+    gloss: (string | null)[];
+    confidence: number;
+    notes: string;
+    rawModel?: string;
+    busy: boolean;
+  };
+  const [sentence, setSentence] = useState<SentenceState>({
+    sentence: "",
+    mode: null,
+    gloss: [],
+    confidence: 0,
+    notes: "",
+    busy: false,
+  });
+
+  async function transcribeSentence() {
+    if (frames.length === 0) return;
+    setSentence((s) => ({ ...s, busy: true, notes: "" }));
+    try {
+      const r = await fetch("/api/asl/transcribe-video", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          // Cap to 12 frames for the multi-image batch (model limit-friendly)
+          frames: pickEvenly(frames.map((f) => f.thumb), 12),
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error?.formErrors?.join(", ") ?? "transcription failed");
+      const res = data.result;
+      setSentence({
+        sentence: res?.sentence ?? "",
+        mode: res?.mode ?? "unclear",
+        gloss: res?.gloss ?? [],
+        confidence: typeof res?.confidence === "number" ? res.confidence : 0,
+        notes: res?.notes ?? "",
+        rawModel: res?.rawModel,
+        busy: false,
+      });
+    } catch (e: any) {
+      setSentence((s) => ({
+        ...s,
+        busy: false,
+        notes: e?.message ?? "transcription failed",
+      }));
+    }
+  }
+
   // Typed-sentence playback state
   const [sentenceInput, setSentenceInput] = useState("ASL FOR EVERY BUILDER");
   const [playing, setPlaying] = useState(false);
@@ -456,6 +508,80 @@ export default function AslVideoDemo() {
           </div>
         </section>
       )}
+
+      {frames.length > 0 && (
+        <section className="glass rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <div className="text-xs uppercase tracking-wider text-white/40">
+              4. Sentence-level transcription · GLM-4.5V batch
+            </div>
+            <div className="flex items-center gap-1.5">
+              {sentence.mode && <span className="tag">{sentence.mode}</span>}
+              {sentence.confidence > 0 && (
+                <span className="tag">{Math.round(sentence.confidence * 100)}% conf</span>
+              )}
+              {sentence.rawModel && <span className="tag">Z.AI · {sentence.rawModel}</span>}
+            </div>
+          </div>
+          <p className="text-[11px] text-white/50 mb-3 leading-snug">
+            Sends up to 12 keyframes to GLM-4.5V in one batch and asks for the English sentence —
+            so full ASL signs (HELLO, THANK_YOU) collapse into words instead of staying as
+            individual letters. Complementary to the per-frame transcript above.
+          </p>
+          <button
+            className="btn"
+            onClick={transcribeSentence}
+            disabled={sentence.busy}
+          >
+            {sentence.busy ? "🧠 Transcribing…" : sentence.sentence ? "↻ Re-transcribe" : "🧠 Transcribe as full sentence"}
+          </button>
+          {sentence.sentence && (
+            <div className="mt-4 rounded-lg border border-accent2/40 bg-accent2/5 px-4 py-3">
+              <div className="text-[10px] uppercase tracking-wider text-accent2 mb-1">
+                Translated sentence
+              </div>
+              <div className="text-xl text-white/90 italic leading-snug">
+                "{sentence.sentence}"
+              </div>
+            </div>
+          )}
+          {sentence.gloss.length > 0 && (
+            <div className="mt-3">
+              <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">
+                Per-frame gloss
+              </div>
+              <div className="flex flex-wrap gap-1 font-mono text-xs">
+                {sentence.gloss.map((g, i) => (
+                  <span
+                    key={i}
+                    className={
+                      "px-1.5 py-0.5 rounded border " +
+                      (g
+                        ? "bg-white/5 border-white/10 text-white/80"
+                        : "bg-white/2 border-white/5 text-white/30")
+                    }
+                  >
+                    {g ?? "—"}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {sentence.notes && (
+            <div className="mt-3 text-[11px] text-white/50 italic">↳ {sentence.notes}</div>
+          )}
+          {sentence.sentence && (
+            <div className="mt-3 flex gap-2">
+              <button
+                className="btn-ghost text-xs"
+                onClick={() => navigator.clipboard.writeText(sentence.sentence)}
+              >
+                📋 Copy sentence
+              </button>
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }
@@ -509,4 +635,14 @@ function seekVideo(v: HTMLVideoElement, t: number): Promise<void> {
     v.addEventListener("seeked", onSeeked);
     v.currentTime = t;
   });
+}
+
+function pickEvenly<T>(arr: T[], n: number): T[] {
+  if (arr.length <= n) return arr;
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) {
+    const idx = Math.floor((i + 0.5) * (arr.length / n));
+    out.push(arr[Math.min(arr.length - 1, idx)]);
+  }
+  return out;
 }
