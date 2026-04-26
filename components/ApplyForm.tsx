@@ -39,8 +39,108 @@ export default function ApplyForm() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [visionEvidence, setVisionEvidence] = useState<VisionEvidence | null>(null);
   const [analysingImage, setAnalysingImage] = useState(false);
+  const [imageSource, setImageSource] = useState<"upload" | "camera" | "screen">("upload");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [streaming, setStreaming] = useState(false);
 
-  useEffect(() => () => recRef.current?.stop?.(), []);
+  useEffect(() => () => {
+    recRef.current?.stop?.();
+    stopStream();
+  }, []);
+
+  function stopStream() {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setStreaming(false);
+  }
+
+  async function startCamera() {
+    setErr(null);
+    stopStream();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+      setStreaming(true);
+      setImageSource("camera");
+    } catch (e: any) {
+      setErr(e?.message ?? "camera access denied");
+    }
+  }
+
+  async function startScreen() {
+    setErr(null);
+    stopStream();
+    try {
+      const stream = await (navigator.mediaDevices as any).getDisplayMedia({
+        video: { displaySurface: "browser" },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+      setStreaming(true);
+      setImageSource("screen");
+      // user can stop sharing from the browser chrome — sync our state when that happens
+      stream.getVideoTracks()[0]?.addEventListener("ended", () => stopStream());
+    } catch (e: any) {
+      setErr(e?.message ?? "screen capture cancelled");
+    }
+  }
+
+  async function captureFrame() {
+    const v = videoRef.current;
+    if (!v || !streamRef.current) return;
+    const w = v.videoWidth || 1280;
+    const h = v.videoHeight || 720;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(v, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    setImagePreview(dataUrl);
+    await analyseDataUrl(dataUrl, imageSource === "screen" ? "screen" : "camera");
+  }
+
+  async function analyseDataUrl(dataUrl: string, source: VisionEvidence["source"]) {
+    setAnalysingImage(true);
+    try {
+      const r = await fetch("/api/vision/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ imageDataUrl: dataUrl, source }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error?.formErrors?.join(", ") ?? "vision call failed");
+      const ev: VisionEvidence = data.evidence;
+      setVisionEvidence(ev);
+      const block = [
+        `[vision evidence — ${source}]`,
+        ev.description,
+        ev.claimsVisible.length ? `claims: ${ev.claimsVisible.join(" · ")}` : "",
+        ev.technicalSignals.length ? `tech: ${ev.technicalSignals.join(" · ")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      appendPitch(block);
+    } catch (e: any) {
+      setErr(e?.message ?? "vision analysis failed");
+    } finally {
+      setAnalysingImage(false);
+    }
+  }
 
   function appendPitch(s: string) {
     setPitch((p) => (p ? `${p.replace(/\s+$/, "")} ${s}` : s));
@@ -93,31 +193,7 @@ export default function ApplyForm() {
       fr.readAsDataURL(file);
     });
     setImagePreview(dataUrl);
-    setAnalysingImage(true);
-    try {
-      const r = await fetch("/api/vision/analyze", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ imageDataUrl: dataUrl, source: "upload" }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data?.error?.formErrors?.join(", ") ?? "vision call failed");
-      const ev: VisionEvidence = data.evidence;
-      setVisionEvidence(ev);
-      const block = [
-        "[vision evidence]",
-        ev.description,
-        ev.claimsVisible.length ? `claims: ${ev.claimsVisible.join(" · ")}` : "",
-        ev.technicalSignals.length ? `tech: ${ev.technicalSignals.join(" · ")}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-      appendPitch(block);
-    } catch (e: any) {
-      setErr(e?.message ?? "vision analysis failed");
-    } finally {
-      setAnalysingImage(false);
-    }
+    await analyseDataUrl(dataUrl, "upload");
   }
 
   async function submit(e: React.FormEvent) {
@@ -210,45 +286,123 @@ export default function ApplyForm() {
 
         {mode === "image" && (
           <div className="mb-3 space-y-3">
-            <label
-              className="block rounded-xl border border-dashed border-white/20 bg-white/5 hover:border-accent/40 transition cursor-pointer p-6 text-center"
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                const f = e.dataTransfer.files?.[0];
-                if (f) onImageFile(f);
-              }}
-            >
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                hidden
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
+            <div className="flex flex-wrap gap-1 text-xs">
+              {(["upload", "camera", "screen"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => {
+                    if (s !== "camera" && s !== "screen") stopStream();
+                    setImageSource(s);
+                  }}
+                  className={
+                    "px-3 py-1 rounded-md border transition " +
+                    (imageSource === s
+                      ? "bg-accent/20 border-accent text-white"
+                      : "bg-white/5 border-white/10 text-white/60 hover:border-white/30")
+                  }
+                >
+                  {s === "upload" ? "📁 Upload" : s === "camera" ? "📷 Live camera" : "🖥 Screen"}
+                </button>
+              ))}
+            </div>
+
+            {imageSource === "upload" && (
+              <label
+                className="block rounded-xl border border-dashed border-white/20 bg-white/5 hover:border-accent/40 transition cursor-pointer p-6 text-center"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const f = e.dataTransfer.files?.[0];
                   if (f) onImageFile(f);
                 }}
-              />
-              <div className="text-sm text-white/70">
-                {analysingImage
-                  ? "🔍 GLM-4.5V analysing image…"
-                  : imagePreview
-                  ? "Click or drop to replace the image"
-                  : "Drop a screenshot / demo image here, or click to select"}
+              >
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) onImageFile(f);
+                  }}
+                />
+                <div className="text-sm text-white/70">
+                  {analysingImage
+                    ? "🔍 GLM-4.5V analysing image…"
+                    : imagePreview
+                    ? "Click or drop to replace the image"
+                    : "Drop a screenshot / demo image here, or click to select"}
+                </div>
+                <div className="text-[11px] text-white/40 mt-1">
+                  PNG / JPEG / WebP, ≤ 7MB. Sponsor model: Z.AI GLM-4.5V.
+                </div>
+              </label>
+            )}
+
+            {(imageSource === "camera" || imageSource === "screen") && (
+              <div className="rounded-xl border border-white/10 bg-black/40 overflow-hidden">
+                <div className="aspect-video bg-black flex items-center justify-center relative">
+                  <video
+                    ref={videoRef}
+                    playsInline
+                    muted
+                    className={"w-full h-full object-contain " + (streaming ? "" : "hidden")}
+                  />
+                  {!streaming && (
+                    <div className="text-center p-6">
+                      <div className="text-sm text-white/70 mb-3">
+                        {imageSource === "camera"
+                          ? "Live camera capture — face the lens, then snap."
+                          : "Capture one frame of any window or browser tab."}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={imageSource === "camera" ? startCamera : startScreen}
+                      >
+                        {imageSource === "camera" ? "📷 Start camera" : "🖥 Pick a window"}
+                      </button>
+                    </div>
+                  )}
+                  {streaming && (
+                    <div className="absolute inset-0 ring-2 ring-accent/50 pointer-events-none rounded-md" />
+                  )}
+                </div>
+                {streaming && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-black/50">
+                    <div className="text-[11px] text-white/40">
+                      ● live · {imageSource === "camera" ? "user-facing camera" : "screen / window"}
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="button" className="btn-ghost text-xs" onClick={stopStream}>
+                        Stop
+                      </button>
+                      <button
+                        type="button"
+                        className="btn text-sm"
+                        onClick={captureFrame}
+                        disabled={analysingImage}
+                      >
+                        {analysingImage ? "🔍 Analysing…" : "📸 Capture & analyse"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="text-[11px] text-white/40 mt-1">
-                PNG / JPEG / WebP, ≤ 7MB. Sponsor model: Z.AI GLM-4.5V.
-              </div>
-            </label>
+            )}
 
             {imagePreview && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <img
                   src={imagePreview}
-                  alt="uploaded preview"
+                  alt="captured frame"
                   className="rounded-lg border border-white/10 max-h-56 object-contain bg-black/30"
                 />
                 {visionEvidence && (
                   <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-white/70 space-y-2">
+                    <div className="text-[10px] uppercase tracking-wider text-accent2">
+                      via {visionEvidence.source}
+                    </div>
                     <div>
                       <span className="text-white/40 uppercase tracking-wider text-[10px]">Description</span>
                       <div className="text-white/80">{visionEvidence.description}</div>
