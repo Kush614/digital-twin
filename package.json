@@ -1,0 +1,34 @@
+{
+  "name": "personaforge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Clone yourself: deploy an AI persona with face, voice, on-chain ownership, and DAO action rights. Built for the 2026 BETA Hackathon.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "deploy:contract": "node scripts/deploy-contract.mjs"
+  },
+  "dependencies": {
+    "next": "^15.5.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "viem": "^2.21.45",
+    "zod": "^3.23.8",
+    "@anthropic-ai/sdk": "^0.32.1",
+    "openai": "^4.73.1",
+    "uuid": "^11.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/uuid": "^10.0.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "solc": "^0.8.28"
+  }
+}
