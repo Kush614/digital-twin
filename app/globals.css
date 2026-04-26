@@ -72,3 +72,42 @@ html, body {
 .scroll-fade {
   mask-image: linear-gradient(to bottom, transparent, #000 12%, #000 88%, transparent);
 }
+
+/* Live overlay letter — gentle breathing while held */
+@keyframes letter-breathe {
+  0%, 100% { transform: scale(1);    opacity: 0.92; }
+  50%      { transform: scale(1.05); opacity: 1;    }
+}
+
+/* Letter just landed in the spelling buffer — scale + glow burst */
+@keyframes letter-pop {
+  0%   { transform: scale(1.7); color: #67e8f9; text-shadow: 0 0 18px rgba(103,232,249,0.9); }
+  60%  { transform: scale(0.94); color: #f5f3ee; text-shadow: 0 0 8px rgba(124,92,255,0.5); }
+  100% { transform: scale(1); color: inherit; text-shadow: none; }
+}
+.letter-pop { display: inline-block; animation: letter-pop 380ms cubic-bezier(0.34,1.56,0.64,1); }
+
+/* AI mode: subtle shimmer on the spelling buffer while inflight */
+@keyframes buffer-shimmer {
+  0%   { background-position: -200px 0; }
+  100% { background-position: 200px 0; }
+}
+.buffer-shimmer {
+  background: linear-gradient(90deg, rgba(124,92,255,0) 0%, rgba(124,92,255,0.18) 50%, rgba(124,92,255,0) 100%);
+  background-size: 400px 100%;
+  animation: buffer-shimmer 1.4s linear infinite;
+}
+
+/* Confetti for phrase commit */
+@keyframes confetti-rise {
+  0%   { transform: translate(-50%, 0) rotate(0deg); opacity: 1; }
+  100% { transform: translate(-50%, -120px) rotate(540deg); opacity: 0; }
+}
+.confetti {
+  position: absolute;
+  width: 8px;
+  height: 12px;
+  border-radius: 2px;
+  pointer-events: none;
+  animation: confetti-rise 1100ms ease-out forwards;
+}

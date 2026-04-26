@@ -46,6 +46,20 @@ type FloatingLabel = {
   alpha: number;
 };
 
+type Particle = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  hue: number;
+};
+
+type TrailFrame = {
+  pts: { x: number; y: number }[];
+  age: number; // frames
+};
+
 type Props = {
   onPhrase: (phrase: string) => void;
 };
@@ -59,6 +73,15 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
   const lastFireRef = useRef<{ name: string; at: number } | null>(null);
   const labelsRef = useRef<FloatingLabel[]>([]);
   const labelIdRef = useRef(0);
+  const particlesRef = useRef<Particle[]>([]);
+  const trailRef = useRef<TrailFrame[]>([]);
+  const flashRef = useRef(0);
+  const shimmerTRef = useRef(0);
+  const aiThinkingRef = useRef(false);
+  useEffect(() => { aiThinkingRef.current = aiThinking; }, [aiThinking]);
+  const lastBufferLengthRef = useRef(0);
+  const [popKey, setPopKey] = useState(0);
+  const [confetti, setConfetti] = useState<{ id: number; left: number; color: string; delay: number }[]>([]);
 
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -188,6 +211,9 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
   function drawFrame(ctx: CanvasRenderingContext2D, w: number, h: number, result: any) {
     ctx.clearRect(0, 0, w, h);
 
+    // Hand skeleton trail (drawn first so it's behind the live skeleton).
+    drawTrail(ctx, w, h);
+
     const engine = aslEngineRef.current;
     if (result?.landmarks?.length) {
       for (let hi = 0; hi < result.landmarks.length; hi++) {
@@ -203,6 +229,9 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
 
       const hand = result.landmarks[0];
       const now = performance.now();
+
+      // Push a trail snapshot every ~3 frames; cap at 8 frames in flight.
+      pushTrail(hand);
 
       if (engine === "rules") {
         const pred = classifyAsl(hand);
@@ -234,7 +263,8 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
         cap.lastLandmarks = hand.map((p: any) => ({ x: p.x, y: p.y }));
         const isSteady = motion < 0.012;
         if (!isSteady) cap.steadySince = now;
-        const heldLongEnough = cap.steadySince && now - cap.steadySince > 800;
+        const steadyMs = cap.steadySince ? now - cap.steadySince : 0;
+        const heldLongEnough = steadyMs > 800;
         const cooldownDone = now - cap.lastFiredAt > 1800;
         if (heldLongEnough && cooldownDone && !cap.inflight) {
           cap.inflight = true;
@@ -243,6 +273,9 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
             cap.inflight = false;
           });
         }
+        // Steadiness arc — Apple-Pay-style filling ring around the hand.
+        const progress = Math.max(0, Math.min(1, steadyMs / 800));
+        drawSteadinessRing(ctx, hand, w, h, progress);
       }
 
       if (engine === "off") {
@@ -271,6 +304,127 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
     }
 
     drawFloatingLabels(ctx, w, h);
+    drawParticles(ctx);
+    if (aiThinkingRef.current) drawShimmer(ctx, w, h);
+    drawFlash(ctx, w, h);
+  }
+
+  function pushTrail(hand: { x: number; y: number }[]) {
+    // sample at ~10fps regardless of rAF rate
+    const now = performance.now();
+    const last = trailRef.current[trailRef.current.length - 1];
+    if (last && now - (last as any).t < 90) return;
+    const snap: TrailFrame = {
+      pts: hand.map((p) => ({ x: p.x, y: p.y })),
+      age: 0,
+    };
+    (snap as any).t = now;
+    trailRef.current.push(snap);
+    if (trailRef.current.length > 8) trailRef.current.shift();
+  }
+
+  function drawTrail(ctx: CanvasRenderingContext2D, w: number, h: number) {
+    const arr = trailRef.current;
+    if (arr.length < 2) {
+      arr.forEach((s) => (s.age++));
+      return;
+    }
+    for (let i = 0; i < arr.length; i++) {
+      const snap = arr[i];
+      snap.age++;
+      const alpha = (i / arr.length) * 0.25;
+      if (alpha < 0.02) continue;
+      ctx.strokeStyle = `rgba(124,92,255,${alpha})`;
+      ctx.lineWidth = 2;
+      for (const [a, b] of CONNECTIONS) {
+        const pa = snap.pts[a];
+        const pb = snap.pts[b];
+        if (!pa || !pb) continue;
+        ctx.beginPath();
+        ctx.moveTo(pa.x * w, pa.y * h);
+        ctx.lineTo(pb.x * w, pb.y * h);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawSteadinessRing(
+    ctx: CanvasRenderingContext2D,
+    hand: { x: number; y: number }[],
+    w: number,
+    h: number,
+    progress: number
+  ) {
+    if (progress <= 0) return;
+    let sx = 0, sy = 0;
+    for (const p of hand) { sx += p.x; sy += p.y; }
+    const cx = (sx / hand.length) * w;
+    const cy = (sy / hand.length) * h;
+    const r = Math.min(w, h) * 0.18;
+    ctx.lineWidth = 6;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(34,211,238,${0.55 + 0.4 * progress})`;
+    ctx.shadowColor = "rgba(34,211,238,0.7)";
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  function drawParticles(ctx: CanvasRenderingContext2D) {
+    const next: Particle[] = [];
+    for (const p of particlesRef.current) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.18; // gravity
+      p.vx *= 0.985;
+      p.life -= 0.025;
+      if (p.life <= 0) continue;
+      const alpha = Math.max(0, p.life);
+      ctx.fillStyle = `hsla(${p.hue},85%,68%,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3 * p.life + 1, 0, Math.PI * 2);
+      ctx.fill();
+      next.push(p);
+    }
+    particlesRef.current = next;
+  }
+
+  function drawFlash(ctx: CanvasRenderingContext2D, w: number, h: number) {
+    if (flashRef.current <= 0) return;
+    ctx.fillStyle = `rgba(245,243,238,${flashRef.current * 0.45})`;
+    ctx.fillRect(0, 0, w, h);
+    flashRef.current = Math.max(0, flashRef.current - 0.06);
+  }
+
+  function drawShimmer(ctx: CanvasRenderingContext2D, w: number, h: number) {
+    shimmerTRef.current = (shimmerTRef.current + 0.018) % 1;
+    const x = (shimmerTRef.current * (w + 200)) - 100;
+    const grad = ctx.createLinearGradient(x - 80, 0, x + 80, 0);
+    grad.addColorStop(0, "rgba(124,92,255,0)");
+    grad.addColorStop(0.5, "rgba(124,92,255,0.18)");
+    grad.addColorStop(1, "rgba(124,92,255,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    // ring around the hand if known
+    const last = trailRef.current[trailRef.current.length - 1]?.pts;
+    if (last) {
+      let sx = 0, sy = 0;
+      for (const p of last) { sx += p.x; sy += p.y; }
+      const cx = (sx / last.length) * w;
+      const cy = (sy / last.length) * h;
+      const r = Math.min(w, h) * (0.16 + 0.04 * Math.sin(performance.now() / 140));
+      ctx.strokeStyle = "rgba(124,92,255,0.55)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   function handMotion(prev: { x: number; y: number }[] | null, curr: { x: number; y: number }[]): number {
@@ -340,6 +494,35 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
 
   function commitLetter(letter: string) {
     setAslBuffer((b) => b + letter);
+    setPopKey((k) => k + 1);
+    // Burst — uses last hand center if known, otherwise canvas center
+    const c = canvasRef.current;
+    const last = trailRef.current[trailRef.current.length - 1]?.pts;
+    let cx = (c?.width ?? 960) / 2;
+    let cy = (c?.height ?? 540) / 2;
+    if (last && last.length) {
+      let sx = 0, sy = 0;
+      for (const p of last) { sx += p.x; sy += p.y; }
+      cx = (sx / last.length) * (c?.width ?? 960);
+      cy = (sy / last.length) * (c?.height ?? 540);
+    }
+    spawnParticles(cx, cy, 26);
+    flashRef.current = 1;
+  }
+
+  function spawnParticles(cx: number, cy: number, count: number) {
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + Math.random() * 0.4;
+      const speed = 4 + Math.random() * 5;
+      particlesRef.current.push({
+        x: cx,
+        y: cy,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed - 1,
+        life: 1,
+        hue: Math.random() < 0.5 ? 260 : 190,
+      });
+    }
   }
 
   function clearBuffer() {
@@ -359,6 +542,16 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
         ? "[ASL fingerspelled · Z.AI vision]"
         : "[ASL fingerspelled · rule-based]";
     onPhrase(`${tag} ${trimmed}`);
+    // confetti
+    const colors = ["#7c5cff", "#22d3ee", "#f5f3ee", "#fbbf24"];
+    const next = Array.from({ length: 22 }).map((_, i) => ({
+      id: Date.now() + i,
+      left: 10 + Math.random() * 80,
+      color: colors[i % colors.length],
+      delay: Math.random() * 200,
+    }));
+    setConfetti(next);
+    setTimeout(() => setConfetti([]), 1300);
     clearBuffer();
   }
 
@@ -513,6 +706,7 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
                     style={{
                       color: "rgba(245,243,238,0.92)",
                       textShadow: "0 0 30px rgba(124,92,255,0.9), 0 0 80px rgba(124,92,255,0.4)",
+                      animation: "letter-breathe 1.2s ease-in-out infinite",
                     }}
                   >
                     {aslLetter}
@@ -578,13 +772,37 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
             </div>
           </div>
           <div
-            className="rounded-md bg-black/40 border border-white/10 px-3 py-2 font-mono text-lg min-h-[2.5rem]"
+            className={
+              "relative rounded-md bg-black/40 border border-white/10 px-3 py-2 font-mono text-lg min-h-[2.5rem] overflow-hidden " +
+              (aiThinking ? "buffer-shimmer" : "")
+            }
             style={{ letterSpacing: "0.15em" }}
           >
-            {aslBuffer || <span className="text-white/30">…</span>}
-            {aslLetter && (
-              <span className="text-accent2 animate-pulse"> {aslLetter}</span>
+            {aslBuffer.length === 0 ? (
+              <span className="text-white/30">…</span>
+            ) : (
+              <>
+                <span>{aslBuffer.slice(0, -1)}</span>
+                <span key={popKey} className="letter-pop">
+                  {aslBuffer.slice(-1)}
+                </span>
+              </>
             )}
+            {aslLetter && !aiThinking && (
+              <span className="text-accent2/60 ml-1 animate-pulse">{aslLetter}?</span>
+            )}
+            {confetti.map((c) => (
+              <span
+                key={c.id}
+                className="confetti"
+                style={{
+                  left: `${c.left}%`,
+                  bottom: 0,
+                  background: c.color,
+                  animationDelay: `${c.delay}ms`,
+                }}
+              />
+            ))}
           </div>
           <div className="flex items-center gap-2">
             <button type="button" className="btn-ghost text-xs" onClick={backspace} disabled={!aslBuffer}>
