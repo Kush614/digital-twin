@@ -49,7 +49,20 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
   const [faceVisible, setFaceVisible] = useState(false);
 
   useEffect(() => {
-    return () => stop();
+    // MediaPipe's WASM writes INFO logs to console.error (Emscripten routes
+    // stderr there). Next.js dev overlay treats any console.error as a
+    // popup. Filter MediaPipe's benign info messages while the component
+    // is mounted so the demo isn't constantly interrupted.
+    const orig = console.error;
+    console.error = (...args: any[]) => {
+      const first = args[0];
+      if (typeof first === "string" && /^(INFO:|W\d+|I\d+|TFLite)/i.test(first)) return;
+      orig.apply(console, args);
+    };
+    return () => {
+      console.error = orig;
+      stop();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -67,7 +67,17 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
   const [recognized, setRecognized] = useState<{ name: string; phrase: string; at: number }[]>([]);
 
   useEffect(() => {
-    return () => stop();
+    // Same MediaPipe stderr-routing noise filter as FaceIdCapture.
+    const orig = console.error;
+    console.error = (...args: any[]) => {
+      const first = args[0];
+      if (typeof first === "string" && /^(INFO:|W\d+|I\d+|TFLite)/i.test(first)) return;
+      orig.apply(console, args);
+    };
+    return () => {
+      console.error = orig;
+      stop();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
