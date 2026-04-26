@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 
 const FRAME_COUNT = 24;
 const CONCURRENCY = 4;
+const PLAYBACK_MS_PER_LETTER = 520;
+const PLAYBACK_MS_PER_SPACE  = 360;
 
 type FrameState = {
   index: number;
@@ -25,6 +27,59 @@ export default function AslVideoDemo() {
   const [transcript, setTranscript] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
+
+  // Typed-sentence playback state
+  const [sentenceInput, setSentenceInput] = useState("ASL FOR EVERY BUILDER");
+  const [playing, setPlaying] = useState(false);
+  const [playbackIndex, setPlaybackIndex] = useState(-1);
+  const [playbackBuffer, setPlaybackBuffer] = useState("");
+  const playbackTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (playbackTimerRef.current) {
+      window.clearTimeout(playbackTimerRef.current);
+      playbackTimerRef.current = null;
+    }
+  }, []);
+
+  function stopPlayback() {
+    if (playbackTimerRef.current) {
+      window.clearTimeout(playbackTimerRef.current);
+      playbackTimerRef.current = null;
+    }
+    setPlaying(false);
+    setPlaybackIndex(-1);
+  }
+
+  function startPlayback() {
+    const cleaned = sentenceInput.toUpperCase().replace(/[^A-Z\s]/g, "").trim();
+    if (!cleaned) return;
+    stopPlayback();
+    setPlaybackBuffer("");
+    setPlaying(true);
+
+    let i = 0;
+    const step = () => {
+      if (i >= cleaned.length) {
+        // hold the last letter briefly, then exit
+        playbackTimerRef.current = window.setTimeout(() => {
+          setPlaying(false);
+          setPlaybackIndex(-1);
+        }, 700);
+        return;
+      }
+      const ch = cleaned[i];
+      setPlaybackIndex(i);
+      setPlaybackBuffer((b) => (ch === " " ? (b.endsWith(" ") ? b : b + " ") : b + ch));
+      const delay = ch === " " ? PLAYBACK_MS_PER_SPACE : PLAYBACK_MS_PER_LETTER;
+      i++;
+      playbackTimerRef.current = window.setTimeout(step, delay);
+    };
+    step();
+  }
+
+  const cleanedSentence = sentenceInput.toUpperCase().replace(/[^A-Z\s]/g, "");
+  const currentChar = playbackIndex >= 0 ? cleanedSentence[playbackIndex] : null;
 
   useEffect(() => () => {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
@@ -183,6 +238,81 @@ export default function AslVideoDemo() {
 
   return (
     <div className="space-y-6">
+      <section className="glass rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs uppercase tracking-wider text-white/40">
+            ⌨ Type a sentence → see it fingerspelled
+          </div>
+          <span className="tag">text → ASL playback</span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-3">
+            <input
+              className="input font-mono"
+              placeholder="Type a sentence (A–Z and spaces)…"
+              value={sentenceInput}
+              onChange={(e) => setSentenceInput(e.target.value)}
+              maxLength={120}
+              disabled={playing}
+            />
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn"
+                onClick={startPlayback}
+                disabled={playing || !cleanedSentence.trim()}
+              >
+                {playing ? "Playing…" : "▶ Play"}
+              </button>
+              {playing && (
+                <button type="button" className="btn-ghost text-sm" onClick={stopPlayback}>
+                  ⏹ Stop
+                </button>
+              )}
+              <span className="text-[11px] text-white/40 self-center">
+                Non-letter characters are stripped. Spaces become a brief pause.
+              </span>
+            </div>
+            <div
+              className="rounded-md bg-black/40 border border-white/10 px-3 py-2 font-mono text-base min-h-[2.4rem]"
+              style={{ letterSpacing: "0.18em" }}
+            >
+              {playbackBuffer || <span className="text-white/30">…</span>}
+              {playing && <span className="ml-1 inline-block w-2 h-4 bg-accent2 align-middle animate-pulse" />}
+            </div>
+          </div>
+
+          <div className="relative rounded-xl border border-white/10 bg-black/40 aspect-square sm:aspect-video flex items-center justify-center overflow-hidden">
+            {currentChar && currentChar !== " " ? (
+              <div
+                key={`${playbackIndex}-${currentChar}`}
+                className="text-[140px] font-bold leading-none"
+                style={{
+                  color: "rgba(245,243,238,0.95)",
+                  textShadow:
+                    "0 0 30px rgba(124,92,255,0.95), 0 0 80px rgba(124,92,255,0.45)",
+                  animation: "letter-pop 380ms cubic-bezier(0.34,1.56,0.64,1)",
+                }}
+              >
+                {currentChar}
+              </div>
+            ) : currentChar === " " ? (
+              <div className="text-3xl text-white/30">␣</div>
+            ) : (
+              <div className="text-center px-4">
+                <div className="text-sm text-white/50">
+                  {cleanedSentence ? `Ready to spell "${cleanedSentence.trim()}"` : "Type something to play"}
+                </div>
+                <div className="text-[10px] text-white/30 mt-1">
+                  Each letter pops with the same overlay used by the GLM-4.5V live recogniser below.
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
       <section className="glass rounded-2xl p-5">
         <div className="text-xs uppercase tracking-wider text-white/40 mb-2">1. Source video</div>
         {!videoUrl && (
