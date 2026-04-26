@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import type { InputMode, VisionEvidence } from "@/lib/types";
+
+const LiveGestureCapture = dynamic(() => import("./LiveGestureCapture"), { ssr: false });
 
 const MODES: { id: InputMode; label: string; icon: string; hint: string }[] = [
   { id: "voice",   label: "Voice",         icon: "🎙", hint: "Speak your pitch — browser speech recognition fills it in." },
@@ -430,16 +433,20 @@ export default function ApplyForm() {
           </div>
         )}
 
-        {(mode === "gesture" || mode === "gaze") && (
+        {mode === "gesture" && (
+          <div className="mb-3">
+            <LiveGestureCapture onPhrase={(p) => appendPitch(p)} />
+          </div>
+        )}
+
+        {mode === "gaze" && (
           <div className="mb-3 rounded-lg border border-dashed border-white/15 bg-white/5 p-4 text-xs text-white/60">
-            <div className="font-medium text-white/80 mb-1">
-              {mode === "gesture" ? "Gesture preview" : "Eye-gaze preview"}
-            </div>
+            <div className="font-medium text-white/80 mb-1">Eye-gaze preview</div>
             <div>
-              The full {mode} pipeline runs on MediaPipe in the browser. For the hackathon demo,
-              type into the field below to simulate the selected vocabulary — every other layer
-              (scoring, fraud check, attestation) is identical regardless of how the pitch is
-              entered.
+              The full eye-tracking pipeline runs on MediaPipe FaceLandmarker. For the hackathon
+              demo, type into the field below to simulate the selected vocabulary — every other
+              layer (scoring, fraud check, attestation) is identical regardless of how the pitch
+              is entered.
             </div>
           </div>
         )}
