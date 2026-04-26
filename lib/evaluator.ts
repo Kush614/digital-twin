@@ -1,5 +1,5 @@
-import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
+import { hasZaiKeys, withZai } from "./zai";
 import type {
   Application,
   EvaluationRationale,
@@ -8,9 +8,6 @@ import type {
   SubScores,
 } from "./types";
 
-const ZAI_KEY = process.env.ZAI_API_KEY;
-const ZAI_URL = process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4";
-const ZAI_MODEL = process.env.ZAI_MODEL || "glm-4.5";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 
 const SYSTEM_PROMPT = `You are an impact evaluator for public-goods grants (Gitcoin / Optimism RetroPGF style).
@@ -76,7 +73,7 @@ function userPrompt(app: Application, fp: GitHubFingerprint, flags: FraudFlag[])
 type Provider = "zai" | "anthropic" | "mock";
 
 function provider(): Provider {
-  if (ZAI_KEY) return "zai";
+  if (hasZaiKeys()) return "zai";
   if (ANTHROPIC_KEY) return "anthropic";
   return "mock";
 }
@@ -96,25 +93,28 @@ export async function evaluateApplication(
   let raw = "";
 
   if (p === "zai") {
-    const client = new OpenAI({ apiKey: ZAI_KEY, baseURL: ZAI_URL });
-    const res = await client.chat.completions.create({
-      model: ZAI_MODEL,
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userPrompt(app, fp, flags) },
-      ],
-    });
-    raw = res.choices?.[0]?.message?.content ?? "";
+    try {
+      raw = await withZai(async (client, model) => {
+        const res = await client.chat.completions.create({
+          model,
+          temperature: 0.2,
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: userPrompt(app, fp, flags) },
+          ],
+        });
+        return res.choices?.[0]?.message?.content ?? "";
+      });
+    } catch (e: any) {
+      // Pool exhausted (or non-billing failure) — fall through to Anthropic
+      // if configured, else mock. Don't crash the evaluation.
+      if (ANTHROPIC_KEY) {
+        return evaluateViaAnthropic(app, fp, flags);
+      }
+      return mockEvaluate(fp, flags);
+    }
   } else if (p === "anthropic") {
-    const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
-    const res = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 600,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt(app, fp, flags) }],
-    });
-    raw = res.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+    return evaluateViaAnthropic(app, fp, flags);
   } else {
     // Mock — derive from the GitHub fingerprint so demo is still meaningful.
     return mockEvaluate(fp, flags);
@@ -158,6 +158,29 @@ function clamp25(n: unknown): number | null {
   const v = typeof n === "number" ? n : Number(n);
   if (!Number.isFinite(v)) return null;
   return Math.max(0, Math.min(25, Math.round(v)));
+}
+
+async function evaluateViaAnthropic(
+  app: Application,
+  fp: GitHubFingerprint,
+  flags: FraudFlag[]
+): Promise<EvaluatorResult> {
+  const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+  const res = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 600,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: "user", content: userPrompt(app, fp, flags) }],
+  });
+  const raw = res.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+  const parsed = parseStrict(raw);
+  if (!parsed) return mockEvaluate(fp, flags);
+  const total =
+    parsed.subScores.utility +
+    parsed.subScores.innovation +
+    parsed.subScores.technical +
+    parsed.subScores.credibility;
+  return { subScores: parsed.subScores, total, rationale: parsed.rationale };
 }
 
 function mockEvaluate(fp: GitHubFingerprint, flags: FraudFlag[]): EvaluatorResult {

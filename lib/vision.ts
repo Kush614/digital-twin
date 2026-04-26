@@ -1,11 +1,5 @@
-import OpenAI from "openai";
+import { hasZaiKeys, withZai } from "./zai";
 import type { VisionEvidence } from "./types";
-
-const ZAI_KEY = process.env.ZAI_API_KEY;
-const ZAI_URL = process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4";
-// Z.AI's vision-language model. GLM-4.5V is multimodal (image + text → text).
-// Override via env if a different vision SKU is preferred (e.g. glm-4v-plus).
-const ZAI_VISION_MODEL = process.env.ZAI_VISION_MODEL || "glm-4.5v";
 
 const SYSTEM = `You are an evidence extractor for a public-goods grant evaluator.
 You will receive a single image (a screenshot, demo capture, whiteboard photo, or
@@ -26,26 +20,30 @@ Keep the description ≤ 240 characters. Each claim ≤ 100 characters.
 syntheticConfidence is a float in [0,1].`;
 
 export async function analyzeImage(imageDataUrl: string, source: VisionEvidence["source"]): Promise<VisionEvidence> {
-  if (!ZAI_KEY) {
+  if (!hasZaiKeys()) {
     return mockAnalyze(source);
   }
-  const client = new OpenAI({ apiKey: ZAI_KEY, baseURL: ZAI_URL });
   try {
-    const res = await client.chat.completions.create({
-      model: ZAI_VISION_MODEL,
-      temperature: 0.1,
-      messages: [
-        { role: "system", content: SYSTEM },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Analyse this submission image and reply with the strict JSON object." },
-            { type: "image_url", image_url: { url: imageDataUrl } },
-          ] as any,
-        },
-      ],
-    });
-    const raw = res.choices?.[0]?.message?.content ?? "";
+    const { raw, model } = await withZai(
+      async (client, model) => {
+        const res = await client.chat.completions.create({
+          model,
+          temperature: 0.1,
+          messages: [
+            { role: "system", content: SYSTEM },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Analyse this submission image and reply with the strict JSON object." },
+                { type: "image_url", image_url: { url: imageDataUrl } },
+              ] as any,
+            },
+          ],
+        });
+        return { raw: res.choices?.[0]?.message?.content ?? "", model };
+      },
+      { vision: true }
+    );
     const parsed = parseStrict(raw);
     if (!parsed) return mockAnalyze(source, "model returned non-JSON");
     return {
@@ -54,13 +52,13 @@ export async function analyzeImage(imageDataUrl: string, source: VisionEvidence[
       claimsVisible: parsed.claimsVisible,
       technicalSignals: parsed.technicalSignals,
       syntheticConfidence: parsed.syntheticConfidence,
-      rawModel: ZAI_VISION_MODEL,
+      rawModel: model,
       fetchedAt: Date.now(),
     };
   } catch (e: any) {
     const msg = e?.message ?? String(e);
-    if (/1113|insufficient balance|recharge|quota/i.test(msg)) {
-      return mockAnalyze(source, "Z.AI account out of balance — top up to enable vision analysis");
+    if ((e as any)?.code === "ZAI_POOL_EXHAUSTED") {
+      return mockAnalyze(source, "All Z.AI keys cooling down — vision will retry shortly.");
     }
     return mockAnalyze(source, msg);
   }

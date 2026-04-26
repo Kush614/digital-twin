@@ -1,8 +1,4 @@
-import OpenAI from "openai";
-
-const ZAI_KEY = process.env.ZAI_API_KEY;
-const ZAI_URL = process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4";
-const ZAI_VISION_MODEL = process.env.ZAI_VISION_MODEL || "glm-4.5v";
+import { hasZaiKeys, withZai } from "./zai";
 
 const SYSTEM = `You are an ASL fingerspelling recogniser. The image contains a
 single hand making one letter of the American Sign Language alphabet. Identify
@@ -25,34 +21,38 @@ export type AslVisionResult = {
 };
 
 export async function recogniseAslLetter(imageDataUrl: string): Promise<AslVisionResult> {
-  if (!ZAI_KEY) {
+  if (!hasZaiKeys()) {
     return {
       letter: null,
       confidence: 0,
-      reason: "[mock] no ZAI_API_KEY — set it in .env.local to enable Z.AI ASL recognition.",
+      reason: "[mock] no Z.AI keys configured — set ZAI_API_KEY or ZAI_API_KEYS in .env.local.",
       rawModel: "mock",
     };
   }
-  const client = new OpenAI({ apiKey: ZAI_KEY, baseURL: ZAI_URL });
   try {
-    const res = await client.chat.completions.create({
-      model: ZAI_VISION_MODEL,
-      temperature: 0,
-      messages: [
-        { role: "system", content: SYSTEM },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Identify the ASL letter and reply with the strict JSON." },
-            { type: "image_url", image_url: { url: imageDataUrl } },
-          ] as any,
-        },
-      ],
-    });
-    const raw = res.choices?.[0]?.message?.content ?? "";
+    const { raw, model } = await withZai(
+      async (client, model) => {
+        const res = await client.chat.completions.create({
+          model,
+          temperature: 0,
+          messages: [
+            { role: "system", content: SYSTEM },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Identify the ASL letter and reply with the strict JSON." },
+                { type: "image_url", image_url: { url: imageDataUrl } },
+              ] as any,
+            },
+          ],
+        });
+        return { raw: res.choices?.[0]?.message?.content ?? "", model };
+      },
+      { vision: true }
+    );
     const m = raw.match(/\{[\s\S]*\}/);
     if (!m) {
-      return { letter: null, confidence: 0, reason: `non-JSON: ${raw.slice(0, 80)}`, rawModel: ZAI_VISION_MODEL };
+      return { letter: null, confidence: 0, reason: `non-JSON: ${raw.slice(0, 80)}`, rawModel: model };
     }
     const obj = JSON.parse(m[0]);
     let letter: string | null = null;
@@ -64,21 +64,19 @@ export async function recogniseAslLetter(imageDataUrl: string): Promise<AslVisio
       letter,
       confidence,
       reason: typeof obj.reason === "string" ? obj.reason.slice(0, 200) : "",
-      rawModel: ZAI_VISION_MODEL,
+      rawModel: model,
     };
   } catch (e: any) {
     const msg = e?.message ?? String(e);
-    // Z.AI billing error surfaces as 429 with code 1113. Make the failure
-    // mode legible to the demo audience instead of a raw stack.
-    if (/1113|insufficient balance|recharge|quota/i.test(msg)) {
+    if ((e as any)?.code === "ZAI_POOL_EXHAUSTED") {
       return {
         letter: null,
         confidence: 0,
-        reason: "Z.AI account out of balance — top up at z.ai/billing to enable live ASL.",
-        rawModel: ZAI_VISION_MODEL,
+        reason: "All Z.AI keys are cooling down — try again in a few minutes.",
+        rawModel: "pool-exhausted",
       };
     }
-    return { letter: null, confidence: 0, reason: msg, rawModel: ZAI_VISION_MODEL };
+    return { letter: null, confidence: 0, reason: msg, rawModel: "error" };
   }
 }
 
