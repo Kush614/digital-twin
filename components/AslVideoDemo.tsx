@@ -43,6 +43,22 @@ export default function AslVideoDemo() {
     setVideoUrl(url);
   }
 
+  async function loadIncludedDemo() {
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setErr(null);
+    setFrames([]);
+    setTranscript("");
+    try {
+      const res = await fetch("/examples/asl-cc-vocabulary.mp4");
+      if (!res.ok) throw new Error(`failed to load demo: ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      setVideoUrl(url);
+    } catch (e: any) {
+      setErr(e?.message ?? "could not load included demo clip");
+    }
+  }
+
   function onLoadedMetadata() {
     const v = videoElRef.current;
     if (!v) return;
@@ -170,32 +186,42 @@ export default function AslVideoDemo() {
       <section className="glass rounded-2xl p-5">
         <div className="text-xs uppercase tracking-wider text-white/40 mb-2">1. Source video</div>
         {!videoUrl && (
-          <label
-            className="block rounded-xl border border-dashed border-white/20 bg-white/5 hover:border-accent/40 transition cursor-pointer p-8 text-center"
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              const f = e.dataTransfer.files?.[0];
-              if (f) pickFile(f);
-            }}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="video/mp4,video/webm,video/quicktime"
-              hidden
-              onChange={(e) => {
-                const f = e.target.files?.[0];
+          <div className="space-y-3">
+            <label
+              className="block rounded-xl border border-dashed border-white/20 bg-white/5 hover:border-accent/40 transition cursor-pointer p-8 text-center"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const f = e.dataTransfer.files?.[0];
                 if (f) pickFile(f);
               }}
-            />
-            <div className="text-sm text-white/70 mb-1">
-              Drop a sign-language video here, or click to select
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="video/mp4,video/webm,video/quicktime"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) pickFile(f);
+                }}
+              />
+              <div className="text-sm text-white/70 mb-1">
+                Drop a sign-language video here, or click to select
+              </div>
+              <div className="text-[11px] text-white/40">
+                MP4 / WebM / MOV. Use <span className="font-mono">yt-dlp &lt;youtube-url&gt;</span> to grab a YouTube clip first.
+              </div>
+            </label>
+            <div className="flex items-center gap-2">
+              <button type="button" className="btn-ghost text-sm" onClick={loadIncludedDemo}>
+                ▶ Use included demo clip
+              </button>
+              <span className="text-[10px] text-white/40">
+                public-domain · 1.4 MB · Center for Accessible Technology in Sign (Internet Archive)
+              </span>
             </div>
-            <div className="text-[11px] text-white/40">
-              MP4 / WebM / MOV. Use <span className="font-mono">yt-dlp &lt;youtube-url&gt;</span> to grab a YouTube clip first.
-            </div>
-          </label>
+          </div>
         )}
         {videoUrl && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
