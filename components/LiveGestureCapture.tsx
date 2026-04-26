@@ -78,7 +78,6 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
   const flashRef = useRef(0);
   const shimmerTRef = useRef(0);
   const aiThinkingRef = useRef(false);
-  useEffect(() => { aiThinkingRef.current = aiThinking; }, [aiThinking]);
   const lastBufferLengthRef = useRef(0);
   const [popKey, setPopKey] = useState(0);
   const [confetti, setConfetti] = useState<{ id: number; left: number; color: string; delay: number }[]>([]);
@@ -99,6 +98,7 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
   const [aslConfidence, setAslConfidence] = useState(0);
   const [aslBuffer, setAslBuffer] = useState("");
   const [aiThinking, setAiThinking] = useState(false);
+  useEffect(() => { aiThinkingRef.current = aiThinking; }, [aiThinking]);
   const [aiReason, setAiReason] = useState<string>("");
   const aslHoldRef = useRef<{ letter: string | null; since: number; commitedAt: number; lastSeen: number }>({
     letter: null,
