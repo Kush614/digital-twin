@@ -9,7 +9,10 @@ export type VisionEvidence = {
   rawModel?: string;
   frameCount?: number;        // for video: number of keyframes analysed
   transcript?: string;        // for video: STT capture of spoken pitch
+  transcriptSource?: "browser" | "server" | "none";
   frames?: string[];          // for video: sampled keyframe data URLs (small JPEGs)
+  videoUrl?: string;          // for video: server URL where the recorded blob is served
+  videoMime?: string;
   fetchedAt: number;
 };
 

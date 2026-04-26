@@ -21,7 +21,10 @@ const Body = z.object({
       rawModel: z.string().optional(),
       frameCount: z.number().int().min(0).max(8).optional(),
       transcript: z.string().max(4000).optional(),
+      transcriptSource: z.enum(["browser", "server", "none"]).optional(),
       frames: z.array(z.string().startsWith("data:image/").max(8 * 1024 * 1024)).max(8).optional(),
+      videoUrl: z.string().max(512).optional(),
+      videoMime: z.string().max(80).optional(),
       fetchedAt: z.number(),
     })
     .optional(),

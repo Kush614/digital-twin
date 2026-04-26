@@ -235,12 +235,37 @@ function VisionCard({ evidence }: { evidence: NonNullable<Application["visionEvi
         </div>
       </div>
 
+      {evidence.videoUrl && (
+        <div className="mb-3 rounded-lg overflow-hidden border border-white/10 bg-black">
+          <video
+            src={evidence.videoUrl}
+            controls
+            playsInline
+            preload="metadata"
+            className="w-full max-h-80 bg-black"
+          />
+          <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-white/40 border-t border-white/10 flex items-center justify-between gap-2">
+            <span>Recorded pitch</span>
+            <span className="font-mono normal-case text-white/50">{evidence.videoMime ?? "video/webm"}</span>
+          </div>
+        </div>
+      )}
+
       <p className="text-sm text-white/80 mb-3">{evidence.description}</p>
 
       {evidence.transcript && (
         <div className="mb-3 rounded-lg border border-accent2/30 bg-accent2/5 p-3">
-          <div className="text-[10px] uppercase tracking-wider text-accent2 mb-1">
-            Spoken transcript
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-[10px] uppercase tracking-wider text-accent2">
+              Spoken transcript
+            </div>
+            <span className="text-[9px] uppercase tracking-wider text-white/40">
+              {evidence.transcriptSource === "server"
+                ? "via Z.AI ASR (server fallback)"
+                : evidence.transcriptSource === "browser"
+                ? "via browser SpeechRecognition"
+                : ""}
+            </span>
           </div>
           <div className="text-sm text-white/85 italic leading-snug">
             “{evidence.transcript}”

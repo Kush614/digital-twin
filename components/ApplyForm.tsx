@@ -153,13 +153,17 @@ export default function ApplyForm() {
       const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       rec.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: chunksRef.current[0]?.type || "video/webm" });
+        const mime = chunksRef.current[0]?.type || "video/webm";
+        const blob = new Blob(chunksRef.current, { type: mime });
         const url = URL.createObjectURL(blob);
         setRecordedBlobUrl(url);
         setRecording(false);
         // detach the live preview, switch the visible <video> to playback of the recording
         stopStream();
-        await extractKeyframes(url);
+        // Upload the blob to /api/uploads/video so reviewers can replay later.
+        // Run in parallel with keyframe extraction.
+        const uploadPromise = uploadVideoBlob(blob, mime);
+        await extractKeyframes(url, await uploadPromise);
       };
       recorderRef.current = rec;
       rec.start(250);
@@ -191,7 +195,24 @@ export default function ApplyForm() {
     }
   }
 
-  async function extractKeyframes(blobUrl: string): Promise<void> {
+  async function uploadVideoBlob(blob: Blob, mime: string): Promise<{ url: string; mime: string } | null> {
+    try {
+      const fd = new FormData();
+      const ext = mime.includes("mp4") ? "mp4" : "webm";
+      fd.append("file", blob, `pitch.${ext}`);
+      const r = await fetch("/api/uploads/video", { method: "POST", body: fd });
+      if (!r.ok) return null;
+      const data = await r.json();
+      return { url: data.url, mime: data.mime };
+    } catch {
+      return null;
+    }
+  }
+
+  async function extractKeyframes(
+    blobUrl: string,
+    upload: { url: string; mime: string } | null
+  ): Promise<void> {
     setExtractingFrames(true);
     try {
       const v = document.createElement("video");
@@ -219,7 +240,27 @@ export default function ApplyForm() {
         frames.push(c.toDataURL("image/jpeg", 0.78));
       }
       setVideoFrames(frames);
-      await analyseVideo(frames);
+      // Server-side ASR fallback: if browser STT didn't capture anything,
+      // try transcribing the video file via /api/transcribe.
+      let transcript = sttTranscriptRef.current.trim();
+      let transcriptSource: "browser" | "server" | "none" = transcript ? "browser" : "none";
+      if (!transcript && upload?.url) {
+        const r = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ videoUrl: upload.url }),
+        }).catch(() => null);
+        if (r && r.ok) {
+          const data = await r.json();
+          if (data?.transcript) {
+            transcript = String(data.transcript).trim();
+            sttTranscriptRef.current = transcript;
+            setFinalTranscript(transcript);
+            transcriptSource = "server";
+          }
+        }
+      }
+      await analyseVideo(frames, upload, transcript, transcriptSource);
     } catch (e: any) {
       setErr(e?.message ?? "frame extraction failed");
     } finally {
@@ -238,10 +279,14 @@ export default function ApplyForm() {
     });
   }
 
-  async function analyseVideo(frames: string[]) {
+  async function analyseVideo(
+    frames: string[],
+    upload: { url: string; mime: string } | null,
+    transcript: string,
+    transcriptSource: "browser" | "server" | "none"
+  ) {
     setErr(null);
     setAnalysingImage(true);
-    const transcript = sttTranscriptRef.current.trim();
     try {
       const r = await fetch("/api/vision/analyze-video", {
         method: "POST",
@@ -250,7 +295,13 @@ export default function ApplyForm() {
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data?.error?.formErrors?.join(", ") ?? "video analysis failed");
-      const ev: VisionEvidence = data.evidence;
+      const ev: VisionEvidence = {
+        ...data.evidence,
+        videoUrl: upload?.url,
+        videoMime: upload?.mime,
+        transcript: transcript || data.evidence.transcript,
+        transcriptSource,
+      };
       setVisionEvidence(ev);
       const lines = [
         `[video evidence — ${ev.frameCount ?? frames.length} keyframes${transcript ? " + transcript" : ""}]`,

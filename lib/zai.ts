@@ -15,6 +15,14 @@ import OpenAI from "openai";
 const ZAI_URL = process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4";
 const TEXT_MODEL = process.env.ZAI_MODEL || "glm-4.5";
 const VISION_MODEL = process.env.ZAI_VISION_MODEL || "glm-4.5v";
+const ASR_MODEL = process.env.ZAI_ASR_MODEL || "glm-asr";
+
+export function asrModel(): string {
+  return ASR_MODEL;
+}
+export function zaiBaseUrl(): string {
+  return ZAI_URL;
+}
 
 const COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -71,6 +79,34 @@ export function poolStatus() {
 }
 
 export type ZaiOpts = { vision?: boolean };
+
+// Lower-level: get the next non-cooled API key + base URL. Caller is
+// responsible for the actual HTTP call (used by ASR which doesn't fit
+// the OpenAI SDK chat-completion shape cleanly).
+export function nextZaiKey(): { key: string; baseUrl: string } | null {
+  if (STATE.length === 0) return null;
+  const now = Date.now();
+  const ranked = [...STATE].sort((a, b) => a.cooldownUntil - b.cooldownUntil);
+  for (const s of ranked) {
+    if (s.cooldownUntil <= now) return { key: s.key, baseUrl: ZAI_URL };
+  }
+  return null;
+}
+
+export function reportKeyResult(key: string, ok: boolean, errMsg?: string) {
+  const s = STATE.find((x) => x.key === key);
+  if (!s) return;
+  if (ok) {
+    s.successes++;
+    s.lastError = undefined;
+  } else {
+    if (errMsg && /1113|insufficient balance|recharge|quota|exceeded|rate.?limit|429/i.test(errMsg)) {
+      s.cooldownUntil = Date.now() + COOLDOWN_MS;
+    }
+    s.failures++;
+    s.lastError = errMsg?.slice(0, 240);
+  }
+}
 
 export async function withZai<T>(
   fn: (client: OpenAI, model: string) => Promise<T>,
