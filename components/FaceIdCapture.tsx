@@ -45,6 +45,7 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
   const [blinks, setBlinks] = useState(0);
   const [maxYaw, setMaxYaw] = useState(0);
   const [captured, setCaptured] = useState<FaceDescriptor | null>(null);
+  const [faceVisible, setFaceVisible] = useState(false);
 
   useEffect(() => {
     return () => stop();
@@ -57,16 +58,33 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
     const fileset = await vision.FilesetResolver.forVisionTasks(
       "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.34/wasm"
     );
-    const lm = await vision.FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: {
-        modelAssetPath:
-          "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-        delegate: "GPU",
-      },
-      runningMode: "VIDEO",
-      numFaces: 1,
-      outputFaceBlendshapes: false,
-    });
+    // GPU delegate fails on some Firefox / older Chrome builds. Fall back to CPU
+    // before surfacing an error so the demo just works.
+    let lm: any;
+    try {
+      lm = await vision.FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+          delegate: "GPU",
+        },
+        runningMode: "VIDEO",
+        numFaces: 1,
+        outputFaceBlendshapes: false,
+      });
+    } catch (gpuErr) {
+      console.warn("[FaceID] GPU delegate failed, retrying on CPU", gpuErr);
+      lm = await vision.FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+          delegate: "CPU",
+        },
+        runningMode: "VIDEO",
+        numFaces: 1,
+        outputFaceBlendshapes: false,
+      });
+    }
     landmarkerRef.current = lm;
     return lm;
   }
@@ -151,7 +169,9 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
 
     const face = result?.faceLandmarks?.[0];
     let aligned = false;
+    let faceDetected = false;
     if (face) {
+      faceDetected = true;
       // sample-based bbox to test alignment
       let minX = 1, minY = 1, maxX = 0, maxY = 0;
       for (const p of face) {
@@ -163,8 +183,11 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
       const fcx = ((minX + maxX) / 2) * w;
       const fcy = ((minY + maxY) / 2) * h;
       const fr = Math.max((maxX - minX) * w, (maxY - minY) * h) / 2;
-      const inside = Math.hypot(fcx - cx, fcy - cy) < radius * 0.25;
-      const correctSize = fr > radius * 0.6 && fr < radius * 1.05;
+      // Looser tolerance: face center within half the guide, size from 35%
+      // up to 130% of the guide radius. Keeps people at varying distances
+      // from getting stuck on the alignment step.
+      const inside = Math.hypot(fcx - cx, fcy - cy) < radius * 0.5;
+      const correctSize = fr > radius * 0.35 && fr < radius * 1.3;
       aligned = inside && correctSize;
 
       drawFaceMesh(ctx, face, w, h, aligned);
@@ -205,6 +228,7 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
 
     drawScanSweep(ctx, cx, cy, radius);
     drawRing(ctx, cx, cy, radius);
+    setFaceVisible(faceDetected);
 
     setProgress(progressForStep(step, blinkStateRef.current.count, maxYaw));
   }
@@ -321,11 +345,18 @@ export default function FaceIdCapture({ onCaptured, onCleared }: Props) {
           )}
 
           {step !== "idle" && step !== "captured" && (
-            <div className="absolute inset-x-0 bottom-2 flex justify-center pointer-events-none z-10">
-              <div className="px-3 py-1.5 rounded-md bg-black/70 backdrop-blur text-xs text-white/90 font-mono">
-                {prompt(step, blinks, maxYaw)}
+            <>
+              <div className="absolute top-2 left-2 z-10 px-2 py-1 rounded-md bg-black/70 text-[11px] font-mono">
+                <span className={faceVisible ? "text-accent2" : "text-warn"}>
+                  {faceVisible ? "● face detected" : "○ no face detected"}
+                </span>
               </div>
-            </div>
+              <div className="absolute inset-x-0 bottom-2 flex justify-center pointer-events-none z-10">
+                <div className="px-3 py-1.5 rounded-md bg-black/70 backdrop-blur text-xs text-white/90 font-mono">
+                  {prompt(step, blinks, maxYaw, faceVisible)}
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -355,9 +386,12 @@ function Step({ done, label }: { done: boolean; label: string }) {
   );
 }
 
-function prompt(step: Step, blinks: number, yaw: number): string {
+function prompt(step: Step, blinks: number, yaw: number, faceVisible: boolean): string {
   if (step === "loading") return "Loading FaceLandmarker model…";
-  if (step === "align") return "Center your face inside the circle";
+  if (step === "align") {
+    if (!faceVisible) return "Make sure your face is well-lit and visible to the camera";
+    return "Center your face inside the circle (any reasonable size)";
+  }
   if (step === "blink") return `Blink twice slowly (${blinks}/2)`;
   if (step === "turn") return `Turn your head slightly to one side (${(yaw * 100).toFixed(0)}%)`;
   return "";
