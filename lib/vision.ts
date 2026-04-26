@@ -21,15 +21,23 @@ syntheticConfidence is a float in [0,1].`;
 
 const VIDEO_SYSTEM = `You are an evidence extractor for a public-goods grant evaluator.
 You will receive 4-6 keyframes sampled chronologically from a short pitch video
-(applicant facing camera, signing, demoing software, or showing hardware). Your
-job is to summarise the *whole video* — what changes between frames, what the
-person is showing, and whether they are using sign language to communicate.
+(applicant facing camera, signing, demoing software, or showing hardware). You
+may also receive a SPOKEN_TRANSCRIPT block — the speech-to-text of the audio
+track, if any. Your job is to summarise the *whole video* — what changes
+between frames, what the person is showing, whether they are using sign
+language, and whether the spoken words match what's on screen.
 
-1. describe the overall content of the video (treating frames as a sequence),
-2. extract discrete claims a reviewer could cross-check against the written pitch,
+1. describe the overall content (treating frames as a sequence + integrating
+   the transcript when present),
+2. extract discrete claims a reviewer could cross-check against the written
+   pitch — pull quotable lines from the transcript when relevant,
 3. note technical signals: software shown, hardware shown, sign-language usage,
-   spoken-cues if visible (mouth movement), demo realism,
+   spoken-cues, demo realism, transcript-vs-visual alignment,
 4. estimate the probability the video is AI-generated / deepfake / stitched.
+
+If the transcript is present and substantive, weight it as primary evidence.
+If the person is signing and the transcript is empty, that is normal and
+expected — say so in technicalSignals as a positive signal for accessibility.
 
 Reply with ONLY a single JSON object:
 
@@ -84,7 +92,8 @@ export async function analyzeImage(imageDataUrl: string, source: VisionEvidence[
 }
 
 export async function analyzeVideoFrames(
-  frames: string[]
+  frames: string[],
+  transcript?: string
 ): Promise<VisionEvidence> {
   if (!hasZaiKeys()) {
     return mockAnalyze("video", undefined);
@@ -92,6 +101,9 @@ export async function analyzeVideoFrames(
   if (frames.length === 0) {
     return mockAnalyze("video", "no frames extracted");
   }
+  const transcriptBlock = transcript && transcript.trim().length > 0
+    ? `\n\nSPOKEN_TRANSCRIPT:\n${transcript.trim().slice(0, 1500)}`
+    : "\n\nSPOKEN_TRANSCRIPT: (empty — applicant may be signing or recorded silently)";
   try {
     const { raw, model } = await withZai(
       async (client, model) => {
@@ -103,7 +115,7 @@ export async function analyzeVideoFrames(
             {
               role: "user",
               content: [
-                { type: "text", text: `Analyse these ${frames.length} chronologically-ordered keyframes from a short pitch video. Reply with the strict JSON.` },
+                { type: "text", text: `Analyse these ${frames.length} chronologically-ordered keyframes from a short pitch video. Reply with the strict JSON.${transcriptBlock}` },
                 ...frames.map((url) => ({
                   type: "image_url" as const,
                   image_url: { url },

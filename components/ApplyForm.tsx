@@ -56,6 +56,10 @@ export default function ApplyForm() {
   const [videoFrames, setVideoFrames] = useState<string[]>([]);
   const recordingTimerRef = useRef<number | null>(null);
   const recordedVideoRef = useRef<HTMLVideoElement | null>(null);
+  const sttRef = useRef<any>(null);
+  const sttTranscriptRef = useRef<string>("");
+  const [liveTranscript, setLiveTranscript] = useState<string>("");
+  const [finalTranscript, setFinalTranscript] = useState<string>("");
   const [faceDescriptor, setFaceDescriptor] = useState<FaceDescriptor | null>(null);
   const [showFaceId, setShowFaceId] = useState(false);
 
@@ -76,7 +80,49 @@ export default function ApplyForm() {
       clearInterval(recordingTimerRef.current);
       recordingTimerRef.current = null;
     }
+    if (sttRef.current) {
+      try { sttRef.current.stop(); } catch {}
+      sttRef.current = null;
+    }
     setRecording(false);
+  }
+
+  function startSpeechCapture() {
+    sttTranscriptRef.current = "";
+    setLiveTranscript("");
+    setFinalTranscript("");
+    const SR =
+      (typeof window !== "undefined" && (window as any).SpeechRecognition) ||
+      (typeof window !== "undefined" && (window as any).webkitSpeechRecognition);
+    if (!SR) return;
+    try {
+      const rec = new SR();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = "en-US";
+      rec.onresult = (e: any) => {
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const t = e.results[i]?.[0]?.transcript ?? "";
+          if (e.results[i].isFinal) {
+            sttTranscriptRef.current = (sttTranscriptRef.current + " " + t.trim()).trim();
+          } else {
+            interim += t;
+          }
+        }
+        setLiveTranscript(interim);
+        setFinalTranscript(sttTranscriptRef.current);
+      };
+      rec.onerror = () => {};
+      rec.onend = () => {
+        // Some browsers stop recognition on silence; if we're still recording, restart.
+        if (recording) {
+          try { rec.start(); } catch {}
+        }
+      };
+      rec.start();
+      sttRef.current = rec;
+    } catch {}
   }
 
   async function startVideoRecording() {
@@ -118,6 +164,7 @@ export default function ApplyForm() {
       recorderRef.current = rec;
       rec.start(250);
       setRecording(true);
+      startSpeechCapture();
 
       const startedAt = Date.now();
       recordingTimerRef.current = window.setInterval(() => {
@@ -137,6 +184,10 @@ export default function ApplyForm() {
     if (recordingTimerRef.current) {
       clearInterval(recordingTimerRef.current);
       recordingTimerRef.current = null;
+    }
+    if (sttRef.current) {
+      try { sttRef.current.stop(); } catch {}
+      sttRef.current = null;
     }
   }
 
@@ -190,23 +241,25 @@ export default function ApplyForm() {
   async function analyseVideo(frames: string[]) {
     setErr(null);
     setAnalysingImage(true);
+    const transcript = sttTranscriptRef.current.trim();
     try {
       const r = await fetch("/api/vision/analyze-video", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ frames }),
+        body: JSON.stringify({ frames, transcript: transcript || undefined }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data?.error?.formErrors?.join(", ") ?? "video analysis failed");
       const ev: VisionEvidence = data.evidence;
       setVisionEvidence(ev);
-      const block = [
-        `[video evidence — ${ev.frameCount ?? frames.length} keyframes]`,
+      const lines = [
+        `[video evidence — ${ev.frameCount ?? frames.length} keyframes${transcript ? " + transcript" : ""}]`,
         ev.description,
-        ev.claimsVisible.length ? `claims: ${ev.claimsVisible.join(" · ")}` : "",
-        ev.technicalSignals.length ? `tech: ${ev.technicalSignals.join(" · ")}` : "",
-      ].filter(Boolean).join("\n");
-      appendPitch(block);
+      ];
+      if (transcript) lines.push(`spoken: "${transcript}"`);
+      if (ev.claimsVisible.length) lines.push(`claims: ${ev.claimsVisible.join(" · ")}`);
+      if (ev.technicalSignals.length) lines.push(`tech: ${ev.technicalSignals.join(" · ")}`);
+      appendPitch(lines.filter(Boolean).join("\n"));
     } catch (e: any) {
       setErr(e?.message ?? "video analysis failed");
     } finally {
@@ -630,6 +683,20 @@ export default function ApplyForm() {
                     )}
                   </div>
                 </div>
+                {(recording || finalTranscript || liveTranscript) && (
+                  <div className="p-3 border-t border-white/10 bg-black/30">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-[10px] uppercase tracking-wider text-white/40">
+                        Live transcript {recording && <span className="text-red-400">● recording</span>}
+                      </div>
+                      <div className="text-[10px] text-white/30">browser SpeechRecognition</div>
+                    </div>
+                    <div className="text-sm text-white/80 leading-snug min-h-[1.5rem]">
+                      {finalTranscript || <span className="text-white/40">…</span>}
+                      {liveTranscript && <span className="text-accent2/70 italic"> {liveTranscript}</span>}
+                    </div>
+                  </div>
+                )}
                 {videoFrames.length > 0 && (
                   <div className="p-3 border-t border-white/10 bg-black/30">
                     <div className="text-[10px] uppercase tracking-wider text-white/40 mb-2">
