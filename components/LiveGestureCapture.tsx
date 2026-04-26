@@ -68,17 +68,26 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
   const [recognized, setRecognized] = useState<{ name: string; phrase: string; at: number }[]>([]);
 
   // ASL fingerspelling state
-  const [aslMode, setAslMode] = useState(false);
-  const aslModeRef = useRef(false);
-  useEffect(() => { aslModeRef.current = aslMode; }, [aslMode]);
-  const [aslLetter, setAslLetter] = useState<AslLetter | null>(null);
+  type AslEngine = "off" | "rules" | "ai";
+  const [aslEngine, setAslEngine] = useState<AslEngine>("off");
+  const aslEngineRef = useRef<AslEngine>("off");
+  useEffect(() => { aslEngineRef.current = aslEngine; }, [aslEngine]);
+  const [aslLetter, setAslLetter] = useState<string | null>(null);
   const [aslConfidence, setAslConfidence] = useState(0);
   const [aslBuffer, setAslBuffer] = useState("");
-  const aslHoldRef = useRef<{ letter: AslLetter | null; since: number; commitedAt: number; lastSeen: number }>({
+  const [aiThinking, setAiThinking] = useState(false);
+  const [aiReason, setAiReason] = useState<string>("");
+  const aslHoldRef = useRef<{ letter: string | null; since: number; commitedAt: number; lastSeen: number }>({
     letter: null,
     since: 0,
     commitedAt: 0,
     lastSeen: 0,
+  });
+  const aiCaptureRef = useRef<{ lastLandmarks: { x: number; y: number }[] | null; steadySince: number; lastFiredAt: number; inflight: boolean }>({
+    lastLandmarks: null,
+    steadySince: 0,
+    lastFiredAt: 0,
+    inflight: false,
   });
 
   useEffect(() => {
@@ -179,7 +188,7 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
   function drawFrame(ctx: CanvasRenderingContext2D, w: number, h: number, result: any) {
     ctx.clearRect(0, 0, w, h);
 
-    const inAsl = aslModeRef.current;
+    const engine = aslEngineRef.current;
     if (result?.landmarks?.length) {
       for (let hi = 0; hi < result.landmarks.length; hi++) {
         const hand = result.landmarks[hi];
@@ -187,16 +196,16 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
         const isCertain = cat && cat.score > 0.7 && cat.categoryName !== "None";
         drawHandSkeleton(ctx, hand, w, h, isCertain);
         drawFingertipGlow(ctx, hand, w, h);
-        if (!inAsl && cat && cat.categoryName !== "None" && isCertain) {
+        if (engine === "off" && cat && cat.categoryName !== "None" && isCertain) {
           maybeFireGesture(cat.categoryName, cat.score, hand[0], w, h);
         }
       }
 
-      if (inAsl) {
-        // Run ASL fingerspelling on the most prominent hand only
-        const hand = result.landmarks[0];
+      const hand = result.landmarks[0];
+      const now = performance.now();
+
+      if (engine === "rules") {
         const pred = classifyAsl(hand);
-        const now = performance.now();
         aslHoldRef.current.lastSeen = now;
         if (pred && pred.confidence >= 0.7) {
           setAslLetter(pred.letter);
@@ -205,13 +214,9 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
           if (hold.letter !== pred.letter) {
             hold.letter = pred.letter;
             hold.since = now;
-          } else if (
-            now - hold.since > 700 &&
-            now - hold.commitedAt > 600 // debounce double-fires
-          ) {
+          } else if (now - hold.since > 700 && now - hold.commitedAt > 600) {
             commitLetter(pred.letter);
             hold.commitedAt = now;
-            // require user to leave & re-enter the shape to fire it again
             hold.since = Number.MAX_SAFE_INTEGER;
           }
         } else {
@@ -219,7 +224,28 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
           setAslConfidence(0);
           aslHoldRef.current.letter = null;
         }
-      } else {
+      }
+
+      if (engine === "ai") {
+        // Steadiness detector: send a frame to Z.AI when motion is low for ~800ms
+        const cap = aiCaptureRef.current;
+        cap.lastSeen = now;
+        const motion = handMotion(cap.lastLandmarks, hand);
+        cap.lastLandmarks = hand.map((p: any) => ({ x: p.x, y: p.y }));
+        const isSteady = motion < 0.012;
+        if (!isSteady) cap.steadySince = now;
+        const heldLongEnough = cap.steadySince && now - cap.steadySince > 800;
+        const cooldownDone = now - cap.lastFiredAt > 1800;
+        if (heldLongEnough && cooldownDone && !cap.inflight) {
+          cap.inflight = true;
+          cap.lastFiredAt = now;
+          fireAiCapture(hand, w, h, v).finally(() => {
+            cap.inflight = false;
+          });
+        }
+      }
+
+      if (engine === "off") {
         const top = result.gestures?.[0]?.[0];
         if (top) {
           setCurrentGesture(top.categoryName);
@@ -232,10 +258,9 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
     } else {
       setCurrentGesture("None");
       setConfidence(0);
-      if (inAsl) {
+      if (engine === "rules" || engine === "ai") {
         const hold = aslHoldRef.current;
         const now = performance.now();
-        // Auto-insert a space after 1.5s of no hand if buffer doesn't already end in space
         if (hold.lastSeen && now - hold.lastSeen > 1500) {
           setAslBuffer((b) => (b.length > 0 && !b.endsWith(" ") ? b + " " : b));
           hold.lastSeen = 0;
@@ -248,7 +273,72 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
     drawFloatingLabels(ctx, w, h);
   }
 
-  function commitLetter(letter: AslLetter) {
+  function handMotion(prev: { x: number; y: number }[] | null, curr: { x: number; y: number }[]): number {
+    if (!prev || prev.length !== curr.length) return 1;
+    let sum = 0;
+    for (let i = 0; i < prev.length; i++) {
+      sum += Math.hypot(prev[i].x - curr[i].x, prev[i].y - curr[i].y);
+    }
+    return sum / prev.length;
+  }
+
+  async function fireAiCapture(
+    hand: { x: number; y: number }[],
+    w: number,
+    h: number,
+    video: HTMLVideoElement
+  ) {
+    // Crop a square around the hand bbox with ~30% padding
+    let minX = 1, minY = 1, maxX = 0, maxY = 0;
+    for (const p of hand) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const half = Math.max(maxX - minX, maxY - minY) * 0.7 + 0.05;
+    const sx = Math.max(0, (cx - half) * w);
+    const sy = Math.max(0, (cy - half) * h);
+    const sw = Math.min(w - sx, half * 2 * w);
+    const sh = Math.min(h - sy, half * 2 * h);
+    const out = document.createElement("canvas");
+    out.width = 320;
+    out.height = 320;
+    const octx = out.getContext("2d");
+    if (!octx) return;
+    octx.drawImage(video, sx, sy, sw, sh, 0, 0, 320, 320);
+    const dataUrl = out.toDataURL("image/jpeg", 0.85);
+
+    setAiThinking(true);
+    setAiReason("");
+    try {
+      const r = await fetch("/api/asl/recognize", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ imageDataUrl: dataUrl }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error?.formErrors?.join(", ") ?? "asl call failed");
+      const res = data.result;
+      setAiReason(res?.reason || "");
+      if (res?.letter && res.confidence >= 0.55) {
+        setAslLetter(res.letter);
+        setAslConfidence(res.confidence);
+        commitLetter(res.letter);
+      } else {
+        setAslLetter(null);
+        setAslConfidence(0);
+      }
+    } catch (e: any) {
+      setAiReason(e?.message ?? "Z.AI request failed");
+    } finally {
+      setAiThinking(false);
+    }
+  }
+
+  function commitLetter(letter: string) {
     setAslBuffer((b) => b + letter);
   }
 
@@ -264,7 +354,11 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
   function commitToPitch() {
     const trimmed = aslBuffer.trim();
     if (!trimmed) return;
-    onPhrase(`[ASL fingerspelled] ${trimmed}`);
+    const tag =
+      aslEngineRef.current === "ai"
+        ? "[ASL fingerspelled · Z.AI vision]"
+        : "[ASL fingerspelled · rule-based]";
+    onPhrase(`${tag} ${trimmed}`);
     clearBuffer();
   }
 
@@ -397,16 +491,21 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
             </div>
           )}
 
-          {running && !aslMode && (
+          {running && aslEngine === "off" && (
             <div className="absolute top-2 left-2 z-10 px-2 py-1 rounded-md bg-black/70 text-xs font-mono text-white/80">
               ● live · {currentGesture !== "None" ? `${currentGesture} (${(confidence * 100).toFixed(0)}%)` : "…"}
             </div>
           )}
-          {running && aslMode && (
+          {running && aslEngine !== "off" && (
             <>
               <div className="absolute top-2 left-2 z-10 px-2 py-1 rounded-md bg-black/70 text-xs font-mono text-white/80">
-                ● ASL fingerspelling
+                ● {aslEngine === "ai" ? "Z.AI ASL · live" : "ASL fingerspelling · rules"}
               </div>
+              {aiThinking && (
+                <div className="absolute top-2 right-2 z-10 px-2 py-1 rounded-md bg-accent/30 border border-accent text-[11px] font-mono text-white animate-pulse">
+                  🧠 GLM-4.5V analysing…
+                </div>
+              )}
               {aslLetter && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
                   <div
@@ -422,35 +521,42 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
               )}
               {aslLetter && (
                 <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 px-2 py-1 rounded-md bg-black/70 text-[11px] font-mono text-white/70">
-                  hold {aslLetter} for ~700ms · {(aslConfidence * 100).toFixed(0)}%
+                  {aslEngine === "ai" ? "Z.AI" : "rules"} · {aslLetter} · {(aslConfidence * 100).toFixed(0)}%
                 </div>
               )}
             </>
           )}
         </div>
         {running && (
-          <div className="p-3 bg-black/50 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setAslMode(false)}
-                className={
-                  "px-2.5 py-1 rounded-md text-xs border transition " +
-                  (!aslMode ? "bg-accent/20 border-accent text-white" : "bg-white/5 border-white/10 text-white/60")
-                }
-              >
-                7 Common gestures
-              </button>
-              <button
-                type="button"
-                onClick={() => setAslMode(true)}
-                className={
-                  "px-2.5 py-1 rounded-md text-xs border transition " +
-                  (aslMode ? "bg-accent/20 border-accent text-white" : "bg-white/5 border-white/10 text-white/60")
-                }
-              >
-                ASL fingerspelling
-              </button>
+          <div className="p-3 bg-black/50 flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {(
+                [
+                  { id: "off",   label: "7 Common" },
+                  { id: "rules", label: "ASL · rules" },
+                  { id: "ai",    label: "🧠 ASL · Z.AI live" },
+                ] as { id: AslEngine; label: string }[]
+              ).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => {
+                    setAslEngine(m.id);
+                    setAslLetter(null);
+                    setAslConfidence(0);
+                    aslHoldRef.current = { letter: null, since: 0, commitedAt: 0, lastSeen: 0 };
+                    aiCaptureRef.current = { lastLandmarks: null, steadySince: 0, lastFiredAt: 0, inflight: false };
+                  }}
+                  className={
+                    "px-2.5 py-1 rounded-md text-xs border transition " +
+                    (aslEngine === m.id
+                      ? "bg-accent/20 border-accent text-white"
+                      : "bg-white/5 border-white/10 text-white/60")
+                  }
+                >
+                  {m.label}
+                </button>
+              ))}
             </div>
             <button type="button" className="btn-ghost text-xs" onClick={stop}>
               Stop
@@ -459,12 +565,16 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
         )}
       </div>
 
-      {running && aslMode && (
+      {running && aslEngine !== "off" && (
         <div className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <div className="text-[10px] uppercase tracking-wider text-white/40">Spelling buffer</div>
+            <div className="text-[10px] uppercase tracking-wider text-white/40">
+              Spelling buffer · {aslEngine === "ai" ? "Z.AI vision (full A-Z)" : "rule-based (12 letters)"}
+            </div>
             <div className="text-[10px] text-white/40">
-              supported: {SUPPORTED_LETTERS.join(", ")}
+              {aslEngine === "ai"
+                ? "auto-fires on steady hand · ~1.5s/letter"
+                : `supported: ${SUPPORTED_LETTERS.join(", ")}`}
             </div>
           </div>
           <div
@@ -492,9 +602,13 @@ export default function LiveGestureCapture({ onPhrase }: Props) {
             </button>
           </div>
           <div className="text-[10px] text-white/40 leading-snug">
-            Static-shape ASL fingerspelling, 12-letter subset. J and Z are motion letters and not yet
-            handled. Hold each letter ~700ms to commit; pause &gt;1.5s for a space; the assembled
-            phrase is added to your pitch when you click <em>Add to pitch</em>.
+            {aslEngine === "ai"
+              ? "Z.AI GLM-4.5V identifies the letter from a cropped hand image. Hold the shape steady for ~800ms — the inflight indicator confirms it's analysing. Full A-Z including motion letters J and Z."
+              : "Rule-based static-shape recognition over MediaPipe landmarks. 12-letter subset. Hold each letter ~700ms; pause >1.5s for a space."}
+            {" "}
+            {aiReason && aslEngine === "ai" && (
+              <span className="block mt-1 italic text-white/60">↳ {aiReason}</span>
+            )}
           </div>
         </div>
       )}
