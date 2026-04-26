@@ -1,14 +1,14 @@
 {
-  "name": "personaforge",
+  "name": "impactlens",
   "version": "0.1.0",
   "private": true,
-  "description": "Clone yourself: deploy an AI persona with face, voice, on-chain ownership, and DAO action rights. Built for the 2026 BETA Hackathon.",
+  "description": "Accessibility-first, fraud-aware grant evaluator for public-goods funding. Multimodal pitch input + GitHub fingerprint + on-chain EAS attestation. Built for the 2026 BETA Hackathon.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "deploy:contract": "node scripts/deploy-contract.mjs"
+    "register:schema": "node scripts/register-schema.mjs"
   },
   "dependencies": {
     "next": "^15.5.0",
@@ -18,7 +18,9 @@
     "zod": "^3.23.8",
     "@anthropic-ai/sdk": "^0.32.1",
     "openai": "^4.73.1",
-    "uuid": "^11.0.3"
+    "uuid": "^11.0.3",
+    "@ethereum-attestation-service/eas-sdk": "^2.7.0",
+    "ethers": "^6.13.4"
   },
   "devDependencies": {
     "@types/node": "^22.9.1",
@@ -28,7 +30,6 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.15",
-    "typescript": "^5.6.3",
-    "solc": "^0.8.28"
+    "typescript": "^5.6.3"
   }
 }

@@ -2,9 +2,9 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "PersonaForge — Clone yourself, deploy on-chain",
+  title: "ImpactLens — accessibility-first grant evaluation",
   description:
-    "Upload yourself. Deploy a face-and-voice clone that takes meetings and votes in your DAOs. Built for the 2026 BETA Hackathon.",
+    "Every builder deserves a fair shot. No voice required. No fakers rewarded. Multimodal pitches, GitHub-grounded scoring, on-chain EAS attestation.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
