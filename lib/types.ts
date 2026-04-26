@@ -1,4 +1,14 @@
-export type InputMode = "voice" | "text" | "symbol" | "gesture" | "gaze";
+export type InputMode = "voice" | "text" | "symbol" | "gesture" | "gaze" | "image";
+
+export type VisionEvidence = {
+  source: "upload" | "screen" | "camera";
+  description: string;        // what the model sees
+  claimsVisible: string[];    // discrete claims that can be cross-checked vs. pitch
+  technicalSignals: string[]; // signals usable by the technical sub-score (UI polish, framework hints)
+  syntheticConfidence: number; // 0..1; >= 0.6 trips a fraud flag
+  rawModel?: string;
+  fetchedAt: number;
+};
 
 export type SubScores = {
   utility: number;       // 0–25
@@ -20,7 +30,8 @@ export type FraudFlag = {
     | "star-spike"
     | "ghost-repo"
     | "thin-contributor-graph"
-    | "recycled-project";
+    | "recycled-project"
+    | "synthetic-image";
   severity: "low" | "medium" | "high";
   detail: string;
 };
@@ -59,6 +70,7 @@ export type Application = {
   githubUrl: string;
   pitch: string;
   inputMode: InputMode;
+  visionEvidence?: VisionEvidence;
   fingerprint?: GitHubFingerprint;
   subScores?: SubScores;
   totalScore?: number;

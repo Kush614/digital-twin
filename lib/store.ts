@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { v4 as uuid } from "uuid";
-import type { Application } from "./types";
+import type { Application, VisionEvidence } from "./types";
 
 const DIR = path.join(process.cwd(), "data", "applications");
 
@@ -59,6 +59,7 @@ export async function createApplication(input: {
   githubUrl: string;
   pitch: string;
   inputMode: Application["inputMode"];
+  visionEvidence?: VisionEvidence;
 }): Promise<Application> {
   const id = uuid();
   const slug = slugify(input.projectName);
@@ -71,6 +72,7 @@ export async function createApplication(input: {
     githubUrl: input.githubUrl,
     pitch: input.pitch,
     inputMode: input.inputMode,
+    visionEvidence: input.visionEvidence,
     createdAt: Date.now(),
   };
   return saveApplication(app);

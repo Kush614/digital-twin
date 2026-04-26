@@ -46,6 +46,16 @@ function compactFingerprint(fp: GitHubFingerprint) {
 }
 
 function userPrompt(app: Application, fp: GitHubFingerprint, flags: FraudFlag[]) {
+  const visionBlock = app.visionEvidence
+    ? [
+        "",
+        "VISION EVIDENCE (from Z.AI GLM-4.5V on a submitted screenshot/demo image):",
+        `description: ${app.visionEvidence.description}`,
+        `claims_visible: ${JSON.stringify(app.visionEvidence.claimsVisible)}`,
+        `technical_signals: ${JSON.stringify(app.visionEvidence.technicalSignals)}`,
+        `synthetic_confidence: ${app.visionEvidence.syntheticConfidence}`,
+      ].join("\n")
+    : "";
   return [
     `PROJECT: ${app.projectName}`,
     `CATEGORY: ${app.category}`,
@@ -56,6 +66,7 @@ function userPrompt(app: Application, fp: GitHubFingerprint, flags: FraudFlag[])
     "",
     "GITHUB FINGERPRINT (measured, do not speculate beyond this):",
     JSON.stringify(compactFingerprint(fp), null, 2),
+    visionBlock,
     "",
     "FRAUD FLAGS (factor into credibility):",
     flags.length === 0 ? "none" : flags.map((f) => `- [${f.severity}] ${f.kind}: ${f.detail}`).join("\n"),

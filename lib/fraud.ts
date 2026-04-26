@@ -53,6 +53,17 @@ export function detectFraudSignals(app: Application, fp: GitHubFingerprint): Fra
     });
   }
 
+  // 6. Synthetic image — Z.AI GLM-4.5V flagged the submitted screenshot/demo
+  if (app.visionEvidence && app.visionEvidence.syntheticConfidence >= 0.6) {
+    flags.push({
+      kind: "synthetic-image",
+      severity: app.visionEvidence.syntheticConfidence >= 0.8 ? "high" : "medium",
+      detail: `Vision model rated submitted image ${(
+        app.visionEvidence.syntheticConfidence * 100
+      ).toFixed(0)}% likely synthetic / AI-generated.`,
+    });
+  }
+
   return flags;
 }
 

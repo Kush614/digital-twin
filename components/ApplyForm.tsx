@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { InputMode } from "@/lib/types";
+import type { InputMode, VisionEvidence } from "@/lib/types";
 
 const MODES: { id: InputMode; label: string; icon: string; hint: string }[] = [
   { id: "voice",   label: "Voice",         icon: "🎙", hint: "Speak your pitch — browser speech recognition fills it in." },
   { id: "text",    label: "Text",          icon: "⌨",  hint: "Type or paste a written pitch." },
   { id: "symbol",  label: "Symbol board",  icon: "🖼",  hint: "Tap concept tiles to build a structured pitch (AAC-style)." },
+  { id: "image",   label: "Image / demo",  icon: "📸", hint: "Upload a screenshot, demo capture, or whiteboard photo. Z.AI GLM-4.5V extracts evidence and flags synthetic images." },
   { id: "gesture", label: "Gesture",       icon: "🤟",  hint: "MediaPipe-driven hand-pose vocabulary (preview)." },
   { id: "gaze",    label: "Eye gaze",      icon: "👁",  hint: "Eye-tracking selection (preview)." },
 ];
@@ -35,6 +36,9 @@ export default function ApplyForm() {
   const [err, setErr] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const recRef = useRef<any>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [visionEvidence, setVisionEvidence] = useState<VisionEvidence | null>(null);
+  const [analysingImage, setAnalysingImage] = useState(false);
 
   useEffect(() => () => recRef.current?.stop?.(), []);
 
@@ -72,6 +76,50 @@ export default function ApplyForm() {
     rec.start();
   }
 
+  async function onImageFile(file: File) {
+    setErr(null);
+    if (!file.type.startsWith("image/")) {
+      setErr("Please select an image file.");
+      return;
+    }
+    if (file.size > 7 * 1024 * 1024) {
+      setErr("Image must be under 7MB.");
+      return;
+    }
+    const dataUrl: string = await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result));
+      fr.onerror = () => rej(fr.error);
+      fr.readAsDataURL(file);
+    });
+    setImagePreview(dataUrl);
+    setAnalysingImage(true);
+    try {
+      const r = await fetch("/api/vision/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ imageDataUrl: dataUrl, source: "upload" }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error?.formErrors?.join(", ") ?? "vision call failed");
+      const ev: VisionEvidence = data.evidence;
+      setVisionEvidence(ev);
+      const block = [
+        "[vision evidence]",
+        ev.description,
+        ev.claimsVisible.length ? `claims: ${ev.claimsVisible.join(" · ")}` : "",
+        ev.technicalSignals.length ? `tech: ${ev.technicalSignals.join(" · ")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      appendPitch(block);
+    } catch (e: any) {
+      setErr(e?.message ?? "vision analysis failed");
+    } finally {
+      setAnalysingImage(false);
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -87,6 +135,7 @@ export default function ApplyForm() {
           githubUrl,
           pitch,
           inputMode: mode,
+          visionEvidence: visionEvidence ?? undefined,
         }),
       });
       if (!r.ok) {
@@ -156,6 +205,74 @@ export default function ApplyForm() {
                 {s.label}
               </button>
             ))}
+          </div>
+        )}
+
+        {mode === "image" && (
+          <div className="mb-3 space-y-3">
+            <label
+              className="block rounded-xl border border-dashed border-white/20 bg-white/5 hover:border-accent/40 transition cursor-pointer p-6 text-center"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const f = e.dataTransfer.files?.[0];
+                if (f) onImageFile(f);
+              }}
+            >
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onImageFile(f);
+                }}
+              />
+              <div className="text-sm text-white/70">
+                {analysingImage
+                  ? "🔍 GLM-4.5V analysing image…"
+                  : imagePreview
+                  ? "Click or drop to replace the image"
+                  : "Drop a screenshot / demo image here, or click to select"}
+              </div>
+              <div className="text-[11px] text-white/40 mt-1">
+                PNG / JPEG / WebP, ≤ 7MB. Sponsor model: Z.AI GLM-4.5V.
+              </div>
+            </label>
+
+            {imagePreview && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <img
+                  src={imagePreview}
+                  alt="uploaded preview"
+                  className="rounded-lg border border-white/10 max-h-56 object-contain bg-black/30"
+                />
+                {visionEvidence && (
+                  <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-white/70 space-y-2">
+                    <div>
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Description</span>
+                      <div className="text-white/80">{visionEvidence.description}</div>
+                    </div>
+                    {visionEvidence.claimsVisible.length > 0 && (
+                      <div>
+                        <span className="text-white/40 uppercase tracking-wider text-[10px]">Claims visible</span>
+                        <ul className="list-disc list-inside">
+                          {visionEvidence.claimsVisible.map((c, i) => (
+                            <li key={i}>{c}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {visionEvidence.syntheticConfidence > 0 && (
+                      <div className={visionEvidence.syntheticConfidence >= 0.6 ? "text-warn" : ""}>
+                        synthetic confidence: {(visionEvidence.syntheticConfidence * 100).toFixed(0)}%
+                        {visionEvidence.syntheticConfidence >= 0.6 ? " ⚠ flagged" : ""}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

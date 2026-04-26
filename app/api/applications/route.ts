@@ -10,7 +10,18 @@ const Body = z.object({
   walletAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/).or(z.string().length(0)).optional(),
   githubUrl: z.string().url(),
   pitch: z.string().min(20).max(8000),
-  inputMode: z.enum(["voice", "text", "symbol", "gesture", "gaze"]),
+  inputMode: z.enum(["voice", "text", "symbol", "gesture", "gaze", "image"]),
+  visionEvidence: z
+    .object({
+      source: z.enum(["upload", "screen", "camera"]),
+      description: z.string(),
+      claimsVisible: z.array(z.string()),
+      technicalSignals: z.array(z.string()),
+      syntheticConfidence: z.number().min(0).max(1),
+      rawModel: z.string().optional(),
+      fetchedAt: z.number(),
+    })
+    .optional(),
 });
 
 export async function GET() {
@@ -44,6 +55,7 @@ export async function POST(req: NextRequest) {
     githubUrl: parsed.data.githubUrl,
     pitch: parsed.data.pitch,
     inputMode: parsed.data.inputMode,
+    visionEvidence: parsed.data.visionEvidence,
   });
   return NextResponse.json({ application: app });
 }

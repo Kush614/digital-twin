@@ -88,6 +88,7 @@ export default function ApplicationView({ initial }: Props) {
         <>
           <ScoreCard total={app.totalScore!} sub={app.subScores!} rationale={app.rationale!} />
           {app.fingerprint && <FingerprintCard fp={app.fingerprint} />}
+          {app.visionEvidence && <VisionCard evidence={app.visionEvidence} />}
           {app.fraudFlags && app.fraudFlags.length > 0 && <FraudCard flags={app.fraudFlags} />}
           <AttestCard
             app={app}
@@ -200,6 +201,44 @@ function FingerprintCard({ fp }: { fp: NonNullable<Application["fingerprint"]> }
       <div className="mt-3 text-[11px] text-white/40">
         Sub-scores: velocity {fp.velocityScore}/25 · contributors {fp.contributorScore}/25 ·
         engagement {fp.engagementScore}/25 · star-health {fp.starHealthScore}/25
+      </div>
+    </div>
+  );
+}
+
+function VisionCard({ evidence }: { evidence: NonNullable<Application["visionEvidence"]> }) {
+  const synth = Math.round(evidence.syntheticConfidence * 100);
+  const isFlagged = evidence.syntheticConfidence >= 0.6;
+  return (
+    <div className="glass rounded-2xl p-6">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-semibold">Vision evidence</h2>
+        <span className="tag">Z.AI · {evidence.rawModel ?? "vision"}</span>
+      </div>
+      <p className="text-sm text-white/80 mb-3">{evidence.description}</p>
+      {evidence.claimsVisible.length > 0 && (
+        <div className="mb-3">
+          <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">Claims visible</div>
+          <ul className="list-disc list-inside text-sm text-white/70 space-y-0.5">
+            {evidence.claimsVisible.map((c, i) => (
+              <li key={i}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {evidence.technicalSignals.length > 0 && (
+        <div className="mb-3">
+          <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">Technical signals</div>
+          <div className="flex flex-wrap gap-1.5">
+            {evidence.technicalSignals.map((s, i) => (
+              <span key={i} className="tag">{s}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className={"text-xs " + (isFlagged ? "text-warn" : "text-white/50")}>
+        Synthetic confidence: {synth}%
+        {isFlagged ? " — flagged in fraud signals" : " — within tolerance"}
       </div>
     </div>
   );
