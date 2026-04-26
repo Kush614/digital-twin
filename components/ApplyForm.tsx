@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import type { InputMode, VisionEvidence } from "@/lib/types";
+import type { FaceDescriptor, InputMode, VisionEvidence } from "@/lib/types";
 
 const LiveGestureCapture = dynamic(() => import("./LiveGestureCapture"), { ssr: false });
+const FaceIdCapture = dynamic(() => import("./FaceIdCapture"), { ssr: false });
 
 const MODES: { id: InputMode; label: string; icon: string; hint: string }[] = [
   { id: "voice",   label: "Voice",         icon: "🎙", hint: "Speak your pitch — browser speech recognition fills it in." },
@@ -46,6 +47,8 @@ export default function ApplyForm() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [streaming, setStreaming] = useState(false);
+  const [faceDescriptor, setFaceDescriptor] = useState<FaceDescriptor | null>(null);
+  const [showFaceId, setShowFaceId] = useState(false);
 
   useEffect(() => () => {
     recRef.current?.stop?.();
@@ -215,6 +218,7 @@ export default function ApplyForm() {
           pitch,
           inputMode: mode,
           visionEvidence: visionEvidence ?? undefined,
+          faceDescriptor: faceDescriptor ?? undefined,
         }),
       });
       if (!r.ok) {
@@ -236,6 +240,52 @@ export default function ApplyForm() {
 
   return (
     <form onSubmit={submit} className="space-y-6">
+      <div className="glass rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs uppercase tracking-wider text-white/40">Identity verification (anti-sybil)</div>
+          <span className="tag">FaceLandmarker · liveness</span>
+        </div>
+        <p className="text-xs text-white/50 mb-3">
+          Optional but recommended. The same applicant submitting under multiple wallets is one of
+          the documented sybil patterns. We extract a small numeric descriptor from your face mesh
+          (no photo stored) so the reviewer can detect duplicates across applications.
+        </p>
+        {!faceDescriptor && !showFaceId && (
+          <button type="button" className="btn-ghost text-sm" onClick={() => setShowFaceId(true)}>
+            🔒 Verify identity
+          </button>
+        )}
+        {showFaceId && !faceDescriptor && (
+          <FaceIdCapture
+            onCaptured={(d) => setFaceDescriptor(d)}
+            onCleared={() => {
+              setFaceDescriptor(null);
+              setShowFaceId(false);
+            }}
+          />
+        )}
+        {faceDescriptor && (
+          <div className="rounded-lg border border-accent/40 bg-accent/10 p-3 flex items-center justify-between">
+            <div className="text-sm">
+              <div className="font-semibold">✓ Identity descriptor captured</div>
+              <div className="text-xs text-white/60">
+                {faceDescriptor.vector.length} values · liveness: blink ✓ · turn ✓
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => {
+                setFaceDescriptor(null);
+                setShowFaceId(true);
+              }}
+            >
+              ↻ Re-capture
+            </button>
+          </div>
+        )}
+      </div>
+
       <div className="glass rounded-2xl p-5">
         <div className="text-xs uppercase tracking-wider text-white/40 mb-2">Pitch input mode</div>
         <div className="flex flex-wrap gap-2 mb-4">

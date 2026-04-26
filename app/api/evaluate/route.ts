@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getApplication, saveApplication } from "@/lib/store";
+import { getApplication, listApplications, saveApplication } from "@/lib/store";
 import { fetchFingerprint } from "@/lib/github";
 import { detectFraudSignals } from "@/lib/fraud";
+import { detectDuplicateFace } from "@/lib/face";
 import { evaluateApplication } from "@/lib/evaluator";
 
 export const runtime = "nodejs";
@@ -27,6 +28,9 @@ export async function POST(req: NextRequest) {
   }
 
   const flags = detectFraudSignals(app, fp);
+  const others = (await listApplications()).filter((a) => a.id !== app.id);
+  const dup = detectDuplicateFace(app, others);
+  if (dup) flags.push(dup);
   const result = await evaluateApplication(app, fp, flags);
 
   const updated = {

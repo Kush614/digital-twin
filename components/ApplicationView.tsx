@@ -58,6 +58,15 @@ export default function ApplicationView({ initial }: Props) {
         <div className="flex flex-wrap items-center gap-2 mb-2">
           <span className="tag">{app.category}</span>
           <span className="tag">{inputModeLabel(app.inputMode)}</span>
+          {app.faceDescriptor && (
+            <span
+              className="tag"
+              style={{ background: "rgba(34,211,238,0.15)", color: "#67e8f9", borderColor: "rgba(34,211,238,0.35)" }}
+              title="FaceLandmarker descriptor + liveness verified"
+            >
+              🔒 identity verified
+            </span>
+          )}
           {(app.fraudFlags?.length ?? 0) > 0 && (
             <span className="tag" style={{ background: "rgba(245,158,11,0.15)", color: "#fbbf24", borderColor: "rgba(245,158,11,0.35)" }}>
               ⚠ {app.fraudFlags!.length} flag{app.fraudFlags!.length === 1 ? "" : "s"}

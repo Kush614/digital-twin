@@ -31,9 +31,18 @@ export type FraudFlag = {
     | "ghost-repo"
     | "thin-contributor-graph"
     | "recycled-project"
-    | "synthetic-image";
+    | "synthetic-image"
+    | "duplicate-face";
   severity: "low" | "medium" | "high";
   detail: string;
+};
+
+export type FaceDescriptor = {
+  // Orientation-normalised feature vector (cosine-comparable). Length is stable
+  // across versions of FaceLandmarker as long as STABLE_LANDMARKS doesn't change.
+  vector: number[];
+  livenessChecks: { blink: boolean; turn: boolean };
+  capturedAt: number;
 };
 
 export type GitHubFingerprint = {
@@ -71,6 +80,7 @@ export type Application = {
   pitch: string;
   inputMode: InputMode;
   visionEvidence?: VisionEvidence;
+  faceDescriptor?: FaceDescriptor;
   fingerprint?: GitHubFingerprint;
   subScores?: SubScores;
   totalScore?: number;

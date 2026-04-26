@@ -22,6 +22,13 @@ const Body = z.object({
       fetchedAt: z.number(),
     })
     .optional(),
+  faceDescriptor: z
+    .object({
+      vector: z.array(z.number()).max(256),
+      livenessChecks: z.object({ blink: z.boolean(), turn: z.boolean() }),
+      capturedAt: z.number(),
+    })
+    .optional(),
 });
 
 export async function GET() {
@@ -56,6 +63,7 @@ export async function POST(req: NextRequest) {
     pitch: parsed.data.pitch,
     inputMode: parsed.data.inputMode,
     visionEvidence: parsed.data.visionEvidence,
+    faceDescriptor: parsed.data.faceDescriptor,
   });
   return NextResponse.json({ application: app });
 }
