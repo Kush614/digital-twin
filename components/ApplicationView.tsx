@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import type { Application } from "@/lib/types";
+
+const AvatarReader = dynamic(() => import("./AvatarReader"), { ssr: false });
 
 type Props = { initial: Application };
 
@@ -96,6 +99,10 @@ export default function ApplicationView({ initial }: Props) {
       {evaluated && (
         <>
           <ScoreCard total={app.totalScore!} sub={app.subScores!} rationale={app.rationale!} />
+          <AvatarReader
+            scoreLabel={`Score ${app.totalScore} of one hundred.`}
+            text={buildSpokenRationale(app.subScores!, app.rationale!)}
+          />
           {app.fingerprint && <FingerprintCard fp={app.fingerprint} />}
           {app.visionEvidence && <VisionCard evidence={app.visionEvidence} />}
           {app.fraudFlags && app.fraudFlags.length > 0 && <FraudCard flags={app.fraudFlags} />}
@@ -124,6 +131,22 @@ export default function ApplicationView({ initial }: Props) {
       {err && <div className="text-warn text-sm">{err}</div>}
     </div>
   );
+}
+
+function buildSpokenRationale(
+  sub: NonNullable<Application["subScores"]>,
+  rationale: NonNullable<Application["rationale"]>
+): string {
+  // Compact, human-readable narration. Drop bracketed model annotations.
+  const clean = (s: string) => s.replace(/\[[^\]]*\]/g, "").replace(/\s+/g, " ").trim();
+  return [
+    `Utility, ${sub.utility} of 25. ${clean(rationale.utility)}`,
+    `Innovation, ${sub.innovation} of 25. ${clean(rationale.innovation)}`,
+    `Technical, ${sub.technical} of 25. ${clean(rationale.technical)}`,
+    `Credibility, ${sub.credibility} of 25. ${clean(rationale.credibility)}`,
+  ]
+    .filter((s) => s.length > 0)
+    .join(" ");
 }
 
 function inputModeLabel(m: string) {
