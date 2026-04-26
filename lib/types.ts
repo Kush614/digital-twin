@@ -1,12 +1,13 @@
 export type InputMode = "voice" | "text" | "symbol" | "gesture" | "gaze" | "image";
 
 export type VisionEvidence = {
-  source: "upload" | "screen" | "camera";
+  source: "upload" | "screen" | "camera" | "video";
   description: string;        // what the model sees
   claimsVisible: string[];    // discrete claims that can be cross-checked vs. pitch
   technicalSignals: string[]; // signals usable by the technical sub-score (UI polish, framework hints)
   syntheticConfidence: number; // 0..1; >= 0.6 trips a fraud flag
   rawModel?: string;
+  frameCount?: number;        // for video: number of keyframes analysed
   fetchedAt: number;
 };
 

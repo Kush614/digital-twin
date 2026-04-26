@@ -43,10 +43,19 @@ export default function ApplyForm() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [visionEvidence, setVisionEvidence] = useState<VisionEvidence | null>(null);
   const [analysingImage, setAnalysingImage] = useState(false);
-  const [imageSource, setImageSource] = useState<"upload" | "camera" | "screen">("upload");
+  const [imageSource, setImageSource] = useState<"upload" | "camera" | "screen" | "video">("upload");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [streaming, setStreaming] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const [recording, setRecording] = useState(false);
+  const [recordedBlobUrl, setRecordedBlobUrl] = useState<string | null>(null);
+  const [recordedSeconds, setRecordedSeconds] = useState(0);
+  const [extractingFrames, setExtractingFrames] = useState(false);
+  const [videoFrames, setVideoFrames] = useState<string[]>([]);
+  const recordingTimerRef = useRef<number | null>(null);
+  const recordedVideoRef = useRef<HTMLVideoElement | null>(null);
   const [faceDescriptor, setFaceDescriptor] = useState<FaceDescriptor | null>(null);
   const [showFaceId, setShowFaceId] = useState(false);
 
@@ -60,6 +69,149 @@ export default function ApplyForm() {
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setStreaming(false);
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      try { recorderRef.current.stop(); } catch {}
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    setRecording(false);
+  }
+
+  async function startVideoRecording() {
+    setErr(null);
+    setRecordedBlobUrl(null);
+    setVideoFrames([]);
+    setRecordedSeconds(0);
+    chunksRef.current = [];
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: true,
+      });
+      streamRef.current = stream;
+      const v = videoRef.current!;
+      v.srcObject = stream;
+      await v.play().catch(() => {});
+      setStreaming(true);
+      setImageSource("video");
+
+      const mimeCandidates = [
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm",
+        "video/mp4",
+      ];
+      const mimeType = mimeCandidates.find((m) => MediaRecorder.isTypeSupported?.(m)) ?? undefined;
+      const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      rec.onstop = async () => {
+        const blob = new Blob(chunksRef.current, { type: chunksRef.current[0]?.type || "video/webm" });
+        const url = URL.createObjectURL(blob);
+        setRecordedBlobUrl(url);
+        setRecording(false);
+        // detach the live preview, switch the visible <video> to playback of the recording
+        stopStream();
+        await extractKeyframes(url);
+      };
+      recorderRef.current = rec;
+      rec.start(250);
+      setRecording(true);
+
+      const startedAt = Date.now();
+      recordingTimerRef.current = window.setInterval(() => {
+        const sec = Math.floor((Date.now() - startedAt) / 1000);
+        setRecordedSeconds(sec);
+        if (sec >= 10) stopVideoRecording(); // hard cap at 10s
+      }, 200);
+    } catch (e: any) {
+      setErr(e?.message ?? "camera/mic access denied");
+    }
+  }
+
+  function stopVideoRecording() {
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      try { recorderRef.current.stop(); } catch {}
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  }
+
+  async function extractKeyframes(blobUrl: string): Promise<void> {
+    setExtractingFrames(true);
+    try {
+      const v = document.createElement("video");
+      v.src = blobUrl;
+      v.muted = true;
+      v.playsInline = true;
+      v.crossOrigin = "anonymous";
+      await new Promise<void>((res, rej) => {
+        v.onloadedmetadata = () => res();
+        v.onerror = () => rej(new Error("video load failed"));
+      });
+      const dur = isFinite(v.duration) && v.duration > 0 ? v.duration : 1;
+      const w = v.videoWidth || 640;
+      const h = v.videoHeight || 480;
+      const c = document.createElement("canvas");
+      c.width = 480;
+      c.height = Math.round((480 * h) / w);
+      const ctx = c.getContext("2d")!;
+      const sampleCount = 6;
+      const frames: string[] = [];
+      for (let i = 0; i < sampleCount; i++) {
+        const t = (dur * (i + 0.5)) / sampleCount;
+        await seekVideo(v, Math.min(dur - 0.05, t));
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        frames.push(c.toDataURL("image/jpeg", 0.78));
+      }
+      setVideoFrames(frames);
+      await analyseVideo(frames);
+    } catch (e: any) {
+      setErr(e?.message ?? "frame extraction failed");
+    } finally {
+      setExtractingFrames(false);
+    }
+  }
+
+  function seekVideo(v: HTMLVideoElement, t: number): Promise<void> {
+    return new Promise((res) => {
+      const onSeeked = () => {
+        v.removeEventListener("seeked", onSeeked);
+        res();
+      };
+      v.addEventListener("seeked", onSeeked);
+      v.currentTime = t;
+    });
+  }
+
+  async function analyseVideo(frames: string[]) {
+    setErr(null);
+    setAnalysingImage(true);
+    try {
+      const r = await fetch("/api/vision/analyze-video", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ frames }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error?.formErrors?.join(", ") ?? "video analysis failed");
+      const ev: VisionEvidence = data.evidence;
+      setVisionEvidence(ev);
+      const block = [
+        `[video evidence — ${ev.frameCount ?? frames.length} keyframes]`,
+        ev.description,
+        ev.claimsVisible.length ? `claims: ${ev.claimsVisible.join(" · ")}` : "",
+        ev.technicalSignals.length ? `tech: ${ev.technicalSignals.join(" · ")}` : "",
+      ].filter(Boolean).join("\n");
+      appendPitch(block);
+    } catch (e: any) {
+      setErr(e?.message ?? "video analysis failed");
+    } finally {
+      setAnalysingImage(false);
+    }
   }
 
   async function startCamera() {
@@ -340,12 +492,12 @@ export default function ApplyForm() {
         {mode === "image" && (
           <div className="mb-3 space-y-3">
             <div className="flex flex-wrap gap-1 text-xs">
-              {(["upload", "camera", "screen"] as const).map((s) => (
+              {(["upload", "camera", "screen", "video"] as const).map((s) => (
                 <button
                   key={s}
                   type="button"
                   onClick={() => {
-                    if (s !== "camera" && s !== "screen") stopStream();
+                    if (s !== "camera" && s !== "screen" && s !== "video") stopStream();
                     setImageSource(s);
                   }}
                   className={
@@ -355,7 +507,13 @@ export default function ApplyForm() {
                       : "bg-white/5 border-white/10 text-white/60 hover:border-white/30")
                   }
                 >
-                  {s === "upload" ? "📁 Upload" : s === "camera" ? "📷 Live camera" : "🖥 Screen"}
+                  {s === "upload"
+                    ? "📁 Upload"
+                    : s === "camera"
+                    ? "📷 Live camera"
+                    : s === "screen"
+                    ? "🖥 Screen"
+                    : "🎬 Video pitch"}
                 </button>
               ))}
             </div>
@@ -390,6 +548,106 @@ export default function ApplyForm() {
                   PNG / JPEG / WebP, ≤ 7MB. Sponsor model: Z.AI GLM-4.5V.
                 </div>
               </label>
+            )}
+
+            {imageSource === "video" && (
+              <div className="rounded-xl border border-white/10 bg-black/40 overflow-hidden">
+                <div className="aspect-video bg-black flex items-center justify-center relative">
+                  {streaming && (
+                    <video
+                      ref={videoRef}
+                      playsInline
+                      muted
+                      className="absolute inset-0 w-full h-full object-cover"
+                      style={{ transform: "scaleX(-1)" }}
+                    />
+                  )}
+                  {recordedBlobUrl && !streaming && (
+                    <video
+                      ref={recordedVideoRef}
+                      src={recordedBlobUrl}
+                      controls
+                      playsInline
+                      className="absolute inset-0 w-full h-full object-contain"
+                    />
+                  )}
+                  {!streaming && !recordedBlobUrl && (
+                    <div className="text-center p-6">
+                      <div className="text-sm text-white/70 mb-1">
+                        Record up to 10 seconds — sign your pitch, demo on-screen, or talk to camera.
+                      </div>
+                      <div className="text-[11px] text-white/40 mb-3">
+                        We sample 6 keyframes and send them to GLM-4.5V as a single batch.
+                      </div>
+                      <button type="button" className="btn" onClick={startVideoRecording}>
+                        🎬 Start recording
+                      </button>
+                    </div>
+                  )}
+                  {recording && (
+                    <>
+                      <div className="absolute inset-0 ring-4 ring-red-500/60 pointer-events-none rounded-md animate-pulse" />
+                      <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-red-500/80 text-white text-xs font-mono">
+                        ● REC {recordedSeconds}s / 10s
+                      </div>
+                    </>
+                  )}
+                  {extractingFrames && (
+                    <div className="absolute top-2 right-2 px-2 py-1 rounded-md bg-accent/30 border border-accent text-[11px] font-mono text-white animate-pulse">
+                      ✂ extracting keyframes…
+                    </div>
+                  )}
+                  {analysingImage && imageSource === "video" && (
+                    <div className="absolute top-2 right-2 px-2 py-1 rounded-md bg-accent/30 border border-accent text-[11px] font-mono text-white animate-pulse">
+                      🧠 GLM-4.5V analysing 6 frames…
+                    </div>
+                  )}
+                </div>
+                <div className="p-3 bg-black/50 flex items-center justify-between gap-2 flex-wrap">
+                  <div className="text-[11px] text-white/40">
+                    {recording
+                      ? "Recording — speak / sign / demo. Stops at 10s automatically."
+                      : recordedBlobUrl
+                      ? `Recorded ${recordedSeconds}s · ${videoFrames.length} keyframes`
+                      : "Idle"}
+                  </div>
+                  <div className="flex gap-2">
+                    {recording && (
+                      <button type="button" className="btn text-sm" onClick={stopVideoRecording}>
+                        ⏹ Stop
+                      </button>
+                    )}
+                    {!recording && recordedBlobUrl && (
+                      <button type="button" className="btn-ghost text-xs" onClick={() => {
+                        URL.revokeObjectURL(recordedBlobUrl);
+                        setRecordedBlobUrl(null);
+                        setVideoFrames([]);
+                        setVisionEvidence(null);
+                        setRecordedSeconds(0);
+                      }}>
+                        ↻ Re-record
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {videoFrames.length > 0 && (
+                  <div className="p-3 border-t border-white/10 bg-black/30">
+                    <div className="text-[10px] uppercase tracking-wider text-white/40 mb-2">
+                      Sampled keyframes ({videoFrames.length})
+                    </div>
+                    <div className="grid grid-cols-6 gap-1">
+                      {videoFrames.map((f, i) => (
+                        <img
+                          key={i}
+                          src={f}
+                          alt={`frame ${i + 1}`}
+                          className="rounded border border-white/10 aspect-video object-cover"
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
 
             {(imageSource === "camera" || imageSource === "screen") && (

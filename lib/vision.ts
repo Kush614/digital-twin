@@ -19,6 +19,25 @@ Reply with ONLY a single JSON object:
 Keep the description ≤ 240 characters. Each claim ≤ 100 characters.
 syntheticConfidence is a float in [0,1].`;
 
+const VIDEO_SYSTEM = `You are an evidence extractor for a public-goods grant evaluator.
+You will receive 4-6 keyframes sampled chronologically from a short pitch video
+(applicant facing camera, signing, demoing software, or showing hardware). Your
+job is to summarise the *whole video* — what changes between frames, what the
+person is showing, and whether they are using sign language to communicate.
+
+1. describe the overall content of the video (treating frames as a sequence),
+2. extract discrete claims a reviewer could cross-check against the written pitch,
+3. note technical signals: software shown, hardware shown, sign-language usage,
+   spoken-cues if visible (mouth movement), demo realism,
+4. estimate the probability the video is AI-generated / deepfake / stitched.
+
+Reply with ONLY a single JSON object:
+
+{"description":"…","claimsVisible":["…"],"technicalSignals":["…"],"syntheticConfidence":0.0}
+
+Description ≤ 320 characters, each claim ≤ 100 characters,
+syntheticConfidence is a float in [0,1].`;
+
 export async function analyzeImage(imageDataUrl: string, source: VisionEvidence["source"]): Promise<VisionEvidence> {
   if (!hasZaiKeys()) {
     return mockAnalyze(source);
@@ -61,6 +80,60 @@ export async function analyzeImage(imageDataUrl: string, source: VisionEvidence[
       return mockAnalyze(source, "All Z.AI keys cooling down — vision will retry shortly.");
     }
     return mockAnalyze(source, msg);
+  }
+}
+
+export async function analyzeVideoFrames(
+  frames: string[]
+): Promise<VisionEvidence> {
+  if (!hasZaiKeys()) {
+    return mockAnalyze("video", undefined);
+  }
+  if (frames.length === 0) {
+    return mockAnalyze("video", "no frames extracted");
+  }
+  try {
+    const { raw, model } = await withZai(
+      async (client, model) => {
+        const res = await client.chat.completions.create({
+          model,
+          temperature: 0.1,
+          messages: [
+            { role: "system", content: VIDEO_SYSTEM },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: `Analyse these ${frames.length} chronologically-ordered keyframes from a short pitch video. Reply with the strict JSON.` },
+                ...frames.map((url) => ({
+                  type: "image_url" as const,
+                  image_url: { url },
+                })),
+              ] as any,
+            },
+          ],
+        });
+        return { raw: res.choices?.[0]?.message?.content ?? "", model };
+      },
+      { vision: true }
+    );
+    const parsed = parseStrict(raw);
+    if (!parsed) return mockAnalyze("video", "model returned non-JSON");
+    return {
+      source: "video",
+      description: parsed.description,
+      claimsVisible: parsed.claimsVisible,
+      technicalSignals: parsed.technicalSignals,
+      syntheticConfidence: parsed.syntheticConfidence,
+      rawModel: model,
+      frameCount: frames.length,
+      fetchedAt: Date.now(),
+    };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    if ((e as any)?.code === "ZAI_POOL_EXHAUSTED") {
+      return mockAnalyze("video", "All Z.AI keys cooling down — try again shortly.");
+    }
+    return mockAnalyze("video", msg);
   }
 }
 
